@@ -1,0 +1,8 @@
+{
+  "name": "@jmapfe/ui",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

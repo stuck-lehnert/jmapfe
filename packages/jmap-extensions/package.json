@@ -1,0 +1,11 @@
+{
+  "name": "@jmapfe/jmap-extensions",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@jmapfe/jmap-core": "file:../jmap-core"
+  }
+}

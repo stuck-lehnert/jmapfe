@@ -1,0 +1,297 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - deploy
+
+permissions:
+  actions: read
+  contents: write
+
+env:
+  CI: "1"
+
+jobs:
+  wait-for-tests:
+    name: Wait For Test Workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful test.yml for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in {1..90}; do
+            run_state="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow test.yml \
+              --branch "$GITHUB_REF_NAME" \
+              --commit "$GITHUB_SHA" \
+              --json status,conclusion \
+              --limit 1 \
+              --jq '.[0] | select(. != null) | [.status, (.conclusion // "")] | @tsv')"
+
+            if [ -z "$run_state" ]; then
+              sleep 10
+              continue
+            fi
+
+            status="${run_state%%$'\t'*}"
+            conclusion="${run_state#*$'\t'}"
+            if [ "$status" = "completed" ] && [ "$conclusion" = "success" ]; then
+              exit 0
+            fi
+            if [ "$status" = "completed" ]; then
+              echo "test.yml completed with conclusion: $conclusion"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          echo "Timed out waiting for test.yml success for $GITHUB_SHA"
+          exit 1
+
+  web:
+    name: Web Zip
+    needs: wait-for-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Web
+        run: npm run build:web
+
+      - name: Package Web Zip
+        run: |
+          mkdir -p release-assets
+          cd apps/web/dist
+          zip -r "../../../release-assets/jmapfe-web-${GITHUB_SHA::12}.zip" .
+
+      - name: Upload Web Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: release-assets/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux Bundles
+    needs: wait-for-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            rpm \
+            wget
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Linux Bundles
+        run: npm run build:linux
+
+      - name: Collect Linux Bundles
+        run: |
+          mkdir -p release-assets
+          cp apps/desktop-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb release-assets/
+          cp apps/desktop-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm release-assets/
+          cp apps/desktop-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage release-assets/
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: release-assets/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS Bundle
+    needs: wait-for-tests
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build macOS Bundle
+        run: npm run build:macos
+
+      - name: Collect macOS Bundles
+        run: |
+          mkdir -p release-assets
+          shopt -s nullglob
+          for file in apps/desktop-tauri/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg; do
+            cp "$file" release-assets/
+          done
+          for app in apps/desktop-tauri/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app; do
+            ditto -c -k --sequesterRsrc --keepParent "$app" "release-assets/$(basename "${app%.app}").app.zip"
+          done
+          test "$(ls -A release-assets)"
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: release-assets/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows Standalone Exe
+    needs: wait-for-tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Windows Standalone Exe
+        run: npm run build:windows -- --no-bundle
+
+      - name: Collect Windows Exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          $exe = Get-ChildItem "apps/desktop-tauri/src-tauri/target/x86_64-pc-windows-msvc/release" -Filter "*.exe" | Select-Object -First 1
+          if ($null -eq $exe) { throw "No Windows executable found" }
+          Copy-Item $exe.FullName "release-assets/jmapfe-windows-x86_64.exe"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: release-assets/*
+          if-no-files-found: error
+
+  android:
+    name: Android APK And AAB
+    needs: wait-for-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Android Release
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: npm run build:android
+
+      - name: Collect Android Artifacts
+        run: |
+          mkdir -p release-assets
+          cp apps/web/android/app/build/outputs/apk/release/*.apk release-assets/
+          cp apps/web/android/app/build/outputs/bundle/release/*.aab release-assets/
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - web
+      - linux
+      - macos
+      - windows
+      - android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="deploy-${GITHUB_SHA::12}"
+          title="jmapfe ${GITHUB_SHA::12}"
+          notes="Automated release for deploy branch commit $GITHUB_SHA."
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes"
+          fi

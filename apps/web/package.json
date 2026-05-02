@@ -1,0 +1,27 @@
+{
+  "name": "@jmapfe/web",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --web",
+    "start:clear": "expo start --web --clear",
+    "android": "expo run:android",
+    "web": "expo export --platform web"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~5.0.5",
+    "@jmapfe/app-core": "file:../../packages/app-core",
+    "@jmapfe/jmap-core": "file:../../packages/jmap-core",
+    "@jmapfe/ui": "file:../../packages/ui",
+    "@tauri-apps/api": "^2.11.0",
+    "expo": "^53.0.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.6",
+    "react-native-web": "^0.20.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.0.10"
+  }
+}

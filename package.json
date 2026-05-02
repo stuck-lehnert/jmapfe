@@ -1,0 +1,36 @@
+{
+  "name": "jmapfe",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.7",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "overrides": {
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.6"
+  },
+  "scripts": {
+    "build:web": "npm --workspace @jmapfe/web run web",
+    "build:linux": "node scripts/tauri-build.mjs linux",
+    "build:windows": "node scripts/tauri-build.mjs windows",
+    "build:macos": "node scripts/tauri-build.mjs macos",
+    "build:android": "node scripts/android-build.mjs",
+    "dev:web": "npm --workspace @jmapfe/web run start",
+    "dev:native": "node scripts/native-dev.mjs",
+    "dev:android": "npm --workspace @jmapfe/web run android",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --import tsx packages/*/test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.6",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

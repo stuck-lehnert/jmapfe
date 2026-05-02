@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "jmapfe",
+    "slug": "jmapfe",
+    "scheme": "jmapfe",
+    "platforms": ["android", "web"],
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "android": {
+      "package": "app.jmapfe",
+      "versionCode": 1
+    }
+  }
+}

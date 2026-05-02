@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+.expo/
+.turbo/
+coverage/
+*.tsbuildinfo
+apps/desktop-tauri/src-tauri/target/
+PROJECT.md
