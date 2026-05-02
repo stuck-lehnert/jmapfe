@@ -84,9 +84,16 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
+      - name: Upload Web Dist For Desktop Builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          if-no-files-found: error
+
   linux:
     name: Linux Bundles
-    needs: wait-for-tests
+    needs: web
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -116,13 +123,24 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
         with:
-          targets: x86_64-pc-windows-msvc
+          workspaces: apps/desktop-tauri/src-tauri
 
       - name: Install Dependencies
         run: npm ci
 
+      - name: Download Web Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+
       - name: Build Linux Bundles
+        env:
+          TAURI_SKIP_FRONTEND_BUILD: "true"
         run: npm run build:linux
 
       - name: Collect Linux Bundles
@@ -141,7 +159,7 @@ jobs:
 
   macos:
     name: macOS Bundle
-    needs: wait-for-tests
+    needs: web
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -158,10 +176,23 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-tauri/src-tauri
+
       - name: Install Dependencies
         run: npm ci
 
+      - name: Download Web Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+
       - name: Build macOS Bundle
+        env:
+          TAURI_SKIP_FRONTEND_BUILD: "true"
         run: npm run build:macos
 
       - name: Collect macOS Bundles
@@ -185,7 +216,7 @@ jobs:
 
   windows:
     name: Windows Standalone Exe
-    needs: wait-for-tests
+    needs: web
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -199,11 +230,26 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-tauri/src-tauri
 
       - name: Install Dependencies
         run: npm ci
 
+      - name: Download Web Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+
       - name: Build Windows Standalone Exe
+        env:
+          TAURI_SKIP_FRONTEND_BUILD: "true"
         run: npm run build:windows -- --no-bundle
 
       - name: Collect Windows Exe
@@ -243,6 +289,9 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle Build
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Install Dependencies
         run: npm ci

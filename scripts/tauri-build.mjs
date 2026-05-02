@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 const requested = process.argv[2]
 const extraArgs = process.argv.slice(3)
@@ -15,7 +18,14 @@ if (target === undefined) {
   process.exit(1)
 }
 
-runNpm(["--workspace", "@jmapfe/desktop-tauri", "run", "build", "--", "--target", target, ...extraArgs], requested === "linux" ? { NO_STRIP: process.env.NO_STRIP ?? "true" } : {})
+const tauriArgs = ["--target", target, ...extraArgs]
+if (process.env.TAURI_SKIP_FRONTEND_BUILD === "true") {
+  const skipConfigPath = join(mkdtempSync(join(tmpdir(), "jmapfe-tauri-")), "skip-frontend.json")
+  writeFileSync(skipConfigPath, JSON.stringify({ build: { beforeBuildCommand: null } }))
+  tauriArgs.push("--config", skipConfigPath)
+}
+
+runNpm(["--workspace", "@jmapfe/desktop-tauri", "run", "build", "--", ...tauriArgs], requested === "linux" ? { NO_STRIP: process.env.NO_STRIP ?? "true" } : {})
 
 function runNpm(args, env = {}) {
   const npmExecPath = process.env.npm_execpath
