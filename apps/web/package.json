@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",
+    "@expo/vector-icons": "^15.1.1",
     "@jmapfe/app-core": "file:../../packages/app-core",
     "@jmapfe/jmap-core": "file:../../packages/jmap-core",
     "@jmapfe/ui": "file:../../packages/ui",

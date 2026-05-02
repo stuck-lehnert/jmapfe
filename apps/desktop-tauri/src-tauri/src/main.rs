@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -29,6 +30,8 @@ struct JmapHttpResponse {
     status: u16,
     headers: HashMap<String, String>,
     body: String,
+    #[serde(rename = "bodyBase64")]
+    body_base64: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +43,13 @@ struct VaultRequest {
 struct VaultPutRequest {
     key: String,
     secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveFileRequest {
+    suggested_name: String,
+    bytes_base64: String,
 }
 
 #[tauri::command]
@@ -72,12 +82,14 @@ async fn jmap_http(req: JmapHttpRequest) -> Result<JmapHttpResponse, String> {
         .iter()
         .filter_map(|(name, value)| value.to_str().ok().map(|header_value| (name.to_string(), header_value.to_string())))
         .collect();
-    let body = res
-        .text()
+    let body_bytes = res
+        .bytes()
         .await
         .map_err(|err| format!("JMAP bridge body read failed: {err}"))?;
+    let body_base64 = BASE64_STANDARD.encode(&body_bytes);
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
-    Ok(JmapHttpResponse { status, headers, body })
+    Ok(JmapHttpResponse { status, headers, body, body_base64 })
 }
 
 #[tauri::command]
@@ -114,6 +126,22 @@ async fn vault_delete(req: VaultRequest) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn save_file(req: SaveFileRequest) -> Result<bool, String> {
+    let bytes = BASE64_STANDARD
+        .decode(req.bytes_base64)
+        .map_err(|err| format!("Invalid file data: {err}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = rfd::FileDialog::new().set_file_name(&req.suggested_name).save_file() else {
+            return Ok(false);
+        };
+        std::fs::write(path, bytes).map_err(|err| format!("File save failed: {err}"))?;
+        Ok(true)
+    })
+    .await
+    .map_err(|err| format!("File save task failed: {err}"))?
+}
+
+#[tauri::command]
 async fn jmap_api(req: JmapBridgeRequest) -> Result<JmapBridgeResponse, String> {
     let client = reqwest::Client::new();
     let res = client
@@ -134,7 +162,7 @@ async fn jmap_api(req: JmapBridgeRequest) -> Result<JmapBridgeResponse, String> 
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![jmap_api, jmap_http, vault_get, vault_set, vault_delete])
+        .invoke_handler(tauri::generate_handler![jmap_api, jmap_http, vault_get, vault_set, vault_delete, save_file])
         .run(tauri::generate_context!())
         .expect("failed to run jmapfe desktop shell");
 }

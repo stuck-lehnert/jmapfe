@@ -84,16 +84,9 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
-      - name: Upload Web Dist For Desktop Builds
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: apps/web/dist
-          if-no-files-found: error
-
   linux:
     name: Linux Bundles
-    needs: web
+    needs: wait-for-tests
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -132,15 +125,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Download Web Dist
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: apps/web/dist
-
       - name: Build Linux Bundles
-        env:
-          TAURI_SKIP_FRONTEND_BUILD: "true"
         run: npm run build:linux
 
       - name: Collect Linux Bundles
@@ -159,7 +144,7 @@ jobs:
 
   macos:
     name: macOS Bundle
-    needs: web
+    needs: wait-for-tests
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -184,15 +169,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Download Web Dist
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: apps/web/dist
-
       - name: Build macOS Bundle
-        env:
-          TAURI_SKIP_FRONTEND_BUILD: "true"
         run: npm run build:macos
 
       - name: Collect macOS Bundles
@@ -216,7 +193,7 @@ jobs:
 
   windows:
     name: Windows Standalone Exe
-    needs: web
+    needs: wait-for-tests
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -241,15 +218,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Download Web Dist
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: apps/web/dist
-
       - name: Build Windows Standalone Exe
-        env:
-          TAURI_SKIP_FRONTEND_BUILD: "true"
         run: npm run build:windows -- --no-bundle
 
       - name: Collect Windows Exe
