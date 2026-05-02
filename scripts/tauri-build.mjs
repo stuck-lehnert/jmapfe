@@ -18,10 +18,12 @@ if (target === undefined) {
 runNpm(["--workspace", "@jmapfe/desktop-tauri", "run", "build", "--", "--target", target, ...extraArgs], requested === "linux" ? { NO_STRIP: process.env.NO_STRIP ?? "true" } : {})
 
 function runNpm(args, env = {}) {
-  const command = process.platform === "win32" ? "npm.cmd" : "npm"
+  const npmExecPath = process.env.npm_execpath
+  const command = npmExecPath === undefined ? process.platform === "win32" ? "npm.cmd" : "npm" : process.execPath
+  const commandArgs = npmExecPath === undefined ? args : [npmExecPath, ...args]
   const childEnv = { ...process.env, ...env }
   if (childEnv.CI !== undefined && childEnv.CI !== "true" && childEnv.CI !== "false") childEnv.CI = "true"
-  const result = spawnSync(command, args, { env: childEnv, stdio: "inherit" })
+  const result = spawnSync(command, commandArgs, { env: childEnv, stdio: "inherit" })
   if (result.error !== undefined) {
     console.error(result.error.message)
     process.exit(1)
