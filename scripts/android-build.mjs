@@ -30,15 +30,15 @@ function configureReleaseSigning(androidDir) {
   const appAndroidDir = join(androidDir, "app")
   const keystoreName = "jmapfe-release.jks"
   const keystorePath = join(appAndroidDir, keystoreName)
-  const providedKeystore = process.env.ANDROID_KEYSTORE_BASE64?.trim()
-  if (providedKeystore !== undefined && providedKeystore.length > 0 && process.env.ANDROID_KEYSTORE_PASSWORD === undefined) {
+  const providedKeystore = optionalEnv("ANDROID_KEYSTORE_BASE64")
+  if (providedKeystore !== undefined && optionalEnv("ANDROID_KEYSTORE_PASSWORD") === undefined) {
     throw new Error("ANDROID_KEYSTORE_PASSWORD is required when ANDROID_KEYSTORE_BASE64 is provided")
   }
-  const storePassword = process.env.ANDROID_KEYSTORE_PASSWORD ?? generatedPassword()
-  const keyAlias = process.env.ANDROID_KEY_ALIAS ?? "jmapfe"
-  const keyPassword = process.env.ANDROID_KEY_PASSWORD ?? storePassword
+  const storePassword = optionalEnv("ANDROID_KEYSTORE_PASSWORD") ?? generatedPassword()
+  const keyAlias = optionalEnv("ANDROID_KEY_ALIAS") ?? "jmapfe"
+  const keyPassword = optionalEnv("ANDROID_KEY_PASSWORD") ?? storePassword
 
-  if (providedKeystore === undefined || providedKeystore.length === 0) {
+  if (providedKeystore === undefined) {
     run("keytool", [
       "-genkeypair",
       "-v",
@@ -99,6 +99,11 @@ ${indent}}
 
 function generatedPassword() {
   return randomBytes(24).toString("base64url")
+}
+
+function optionalEnv(name) {
+  const value = process.env[name]
+  return value === undefined || value.length === 0 ? undefined : value
 }
 
 function gradleString(value) {

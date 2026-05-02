@@ -19,6 +19,12 @@ runNpm(["--workspace", "@jmapfe/desktop-tauri", "run", "build", "--", "--target"
 
 function runNpm(args, env = {}) {
   const command = process.platform === "win32" ? "npm.cmd" : "npm"
-  const result = spawnSync(command, args, { env: { ...process.env, ...env }, stdio: "inherit" })
+  const childEnv = { ...process.env, ...env }
+  if (childEnv.CI !== undefined && childEnv.CI !== "true" && childEnv.CI !== "false") childEnv.CI = "true"
+  const result = spawnSync(command, args, { env: childEnv, stdio: "inherit" })
+  if (result.error !== undefined) {
+    console.error(result.error.message)
+    process.exit(1)
+  }
   process.exit(result.status ?? 1)
 }
