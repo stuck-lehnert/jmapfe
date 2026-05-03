@@ -31,8 +31,8 @@ import {
   type SrvRecord,
 } from "@jmapfe/jmap-core"
 import { MaterialIcons } from "@expo/vector-icons"
-import { invoke } from "@tauri-apps/api/core"
-import { createElement, useEffect, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
+import { invoke, isTauri as tauriRuntimeAvailable } from "@tauri-apps/api/core"
+import { createElement, useEffect, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions, type GestureResponderEvent, type ViewStyle } from "react-native"
 
 const ACCOUNTS_STORAGE_KEY = "jmapfe.accounts.v1"
@@ -96,18 +96,12 @@ const htmlPreviewFrameStyle: CSSProperties = {
   width: "100%",
 }
 
-const attachmentPreviewObjectStyle: CSSProperties = {
-  border: "0",
-  display: "block",
-  height: "100%",
-  width: "100%",
-}
-
-const attachmentPreviewImageStyle: CSSProperties = {
-  display: "block",
-  maxHeight: "100%",
-  maxWidth: "100%",
-  objectFit: "contain",
+const contextMenuBackdropWebStyle: CSSProperties = {
+  bottom: 0,
+  left: 0,
+  position: "absolute",
+  right: 0,
+  top: 0,
 }
 
 type AppView = "mail" | "settings"
@@ -194,6 +188,7 @@ interface MailMessage {
   readonly jmapAccountId?: string
   readonly mailboxIds: readonly string[]
   readonly subject: string
+  readonly read: boolean
   readonly flagState: MessageFlagState
   readonly from: string
   readonly to: readonly string[]
@@ -272,6 +267,12 @@ interface SearchState {
   readonly error?: string
 }
 
+interface MessageContextMenuState {
+  readonly messageKey: string
+  readonly x: number
+  readonly y: number
+}
+
 interface EmailQueryResult {
   readonly ids: readonly string[]
   readonly total?: number
@@ -287,13 +288,6 @@ interface MessageBody {
 type InlineImageLoadResult =
   | { readonly cid: string; readonly dataUrl: string }
   | { readonly cid: string; readonly name: string; readonly error: string }
-
-interface AttachmentPreviewState {
-  readonly messageKey: string
-  readonly name: string
-  readonly type: string
-  readonly objectUrl: string
-}
 
 interface AttachmentBlobData {
   readonly name: string
@@ -354,17 +348,18 @@ export default function App() {
   const [selectedFolder, setSelectedFolder] = useState("unified:inbox")
   const [selectedMessageKey, setSelectedMessageKey] = useState<string | undefined>()
   const [folderDrawerOpen, setFolderDrawerOpen] = useState(false)
+  const [draggedMessageKey, setDraggedMessageKey] = useState<string | undefined>()
   const [accountAuth, setAccountAuth] = useState<Record<string, AuthProvider>>({})
   const [mailByAccount, setMailByAccount] = useState<Record<string, AccountMailState>>(() => loadMailCache())
   const [loadingMoreFolder, setLoadingMoreFolder] = useState<string | undefined>()
   const [loadingMessageKey, setLoadingMessageKey] = useState<string | undefined>()
   const [loadingInlineImageKey, setLoadingInlineImageKey] = useState<string | undefined>()
   const [loadingAttachmentKey, setLoadingAttachmentKey] = useState<string | undefined>()
-  const [loadingFlagMessageKey, setLoadingFlagMessageKey] = useState<string | undefined>()
+  const [loadingFlagMessageKeys, setLoadingFlagMessageKeys] = useState<Record<string, true>>({})
+  const loadingFlagMessageKeysRef = useRef<Record<string, true>>({})
   const [messageBodyErrors, setMessageBodyErrors] = useState<Record<string, string>>({})
   const [inlineImageErrors, setInlineImageErrors] = useState<Record<string, string>>({})
   const [attachmentErrors, setAttachmentErrors] = useState<Record<string, string>>({})
-  const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | undefined>()
   const [searchDraft, setSearchDraft] = useState("")
   const [searchState, setSearchState] = useState<SearchState>(EMPTY_SEARCH_STATE)
   const [remoteImageProxyBase, setRemoteImageProxyBase] = useState<string | undefined>(() => loadRemoteImageProxyBase())
@@ -375,10 +370,6 @@ export default function App() {
 
   useEffect(() => saveAccounts(accounts), [accounts])
   useEffect(() => saveMailCache(mailByAccount), [mailByAccount])
-  useEffect(() => () => revokeAttachmentPreview(attachmentPreview), [attachmentPreview])
-  useEffect(() => {
-    if (attachmentPreview !== undefined && selectedMessageKey !== attachmentPreview.messageKey) setAttachmentPreview(undefined)
-  }, [attachmentPreview, selectedMessageKey])
   useEffect(() => {
     setMailByAccount((current) => pruneMailCache(current, accounts))
   }, [accounts])
@@ -582,17 +573,15 @@ export default function App() {
     return downloadAttachmentBlob(transport, message.jmapAccountId ?? primaryMailAccountId, attachment)
   }
 
-  const previewAttachment = async (messageKey: string, attachment: EmailAttachmentPart, index: number): Promise<void> => {
+  const openAttachment = async (messageKey: string, attachment: EmailAttachmentPart, index: number): Promise<void> => {
     const message = findMessageByKey(mailByAccount, messageKey)
     if (message === undefined) return
     const actionKey = attachmentActionKey(messageKey, attachment, index)
     setLoadingAttachmentKey(actionKey)
     setAttachmentErrors((current) => omitKey(current, messageKey))
     try {
-      if (!canPreviewAttachment(attachment)) throw new Error("Preview is available for images and PDFs only.")
       const blob = await loadAttachmentBlob(message, attachment)
-      const objectUrl = blobLikeToObjectUrl(blob, attachment.type)
-      setAttachmentPreview({ messageKey, name: attachment.name, type: attachment.type, objectUrl })
+      await openAttachmentBlob(attachment.name, attachment.type, blob)
     } catch (error) {
       setAttachmentErrors((current) => ({ ...current, [messageKey]: connectivityErrorMessage(error) }))
     } finally {
@@ -650,7 +639,7 @@ export default function App() {
 
   const toggleMessageFlag = async (messageKey: string): Promise<void> => {
     const message = findMessageByKey(mailByAccount, messageKey)
-    if (message === undefined || loadingFlagMessageKey !== undefined) return
+    if (message === undefined || loadingFlagMessageKeysRef.current[messageKey] === true) return
     const nextFlagState = nextMessageFlagState(message.flagState)
     const account = accounts.find((item) => item.id === message.accountId)
     const auth = accountAuth[message.accountId]
@@ -659,7 +648,9 @@ export default function App() {
       return
     }
 
-    setLoadingFlagMessageKey(messageKey)
+    const nextLoadingFlagMessageKeys = { ...loadingFlagMessageKeysRef.current, [messageKey]: true as true }
+    loadingFlagMessageKeysRef.current = nextLoadingFlagMessageKeys
+    setLoadingFlagMessageKeys(nextLoadingFlagMessageKeys)
     setMailByAccount((current) => updateMessageFlagState(current, message.accountId, messageKey, nextFlagState))
     try {
       const { client, primaryMailAccountId } = await createMailClient(account, auth)
@@ -668,7 +659,83 @@ export default function App() {
       setMailByAccount((current) => updateMessageFlagState(current, message.accountId, messageKey, message.flagState))
       setNotice(connectivityErrorMessage(error))
     } finally {
-      setLoadingFlagMessageKey((current) => current === messageKey ? undefined : current)
+      const nextLoadingFlagMessageKeys = omitKey(loadingFlagMessageKeysRef.current, messageKey)
+      loadingFlagMessageKeysRef.current = nextLoadingFlagMessageKeys
+      setLoadingFlagMessageKeys(nextLoadingFlagMessageKeys)
+    }
+  }
+
+  const markMessageReadState = async (messageKey: string, read: boolean): Promise<void> => {
+    const message = findMessageByKey(mailByAccount, messageKey)
+    if (message === undefined || message.read === read) return
+    const account = accounts.find((item) => item.id === message.accountId)
+    const auth = accountAuth[message.accountId]
+    if (account === undefined || auth === undefined) {
+      setNotice("Sign in again to update message read state.")
+      return
+    }
+    if (!canSetMessageReadState(mailByAccount[message.accountId], message)) {
+      setNotice("Message read state is read-only for this folder.")
+      return
+    }
+
+    setMailByAccount((current) => updateMessageReadState(current, message.accountId, messageKey, read))
+    try {
+      const { client, primaryMailAccountId } = await createMailClient(account, auth)
+      await setRemoteMessageReadState(client, message.jmapAccountId ?? primaryMailAccountId, message.id, read)
+    } catch (error) {
+      setMailByAccount((current) => updateMessageReadState(current, message.accountId, messageKey, message.read))
+      setNotice(connectivityErrorMessage(error))
+    }
+  }
+
+  const deleteMessage = async (messageKey: string): Promise<void> => {
+    const message = findMessageByKey(mailByAccount, messageKey)
+    if (message === undefined) return
+    const trash = findMailboxByRole(mailByAccount[message.accountId], message.jmapAccountId, "trash")
+    if (trash === undefined) {
+      setNotice("Trash folder was not advertised by server.")
+      return
+    }
+    await moveMessageToMailbox(messageKey, trash.id)
+  }
+
+  const moveMessageToFolder = async (messageKey: string, folderId: string): Promise<void> => {
+    const folder = parseMailboxFolderId(folderId)
+    if (folder === undefined) return
+    await moveMessageToMailbox(messageKey, folder.mailboxId)
+  }
+
+  const moveMessageToMailbox = async (messageKey: string, mailboxId: string): Promise<void> => {
+    const message = findMessageByKey(mailByAccount, messageKey)
+    if (message === undefined) return
+    const account = accounts.find((item) => item.id === message.accountId)
+    const auth = accountAuth[message.accountId]
+    const destination = mailByAccount[message.accountId]?.mailboxes.find((mailbox) => mailbox.id === mailboxId)
+    if (account === undefined || auth === undefined) {
+      setNotice("Sign in again to move messages.")
+      return
+    }
+    if (destination === undefined || destination.serverId === undefined || destination.isSynthetic === true) return
+    if (destination.jmapAccountId !== undefined && destination.jmapAccountId !== message.jmapAccountId) {
+      setNotice("Moving messages between mail accounts is not supported yet.")
+      return
+    }
+    if (destination.myRights?.mayAddItems === false || destination.jmapAccountIsReadOnly === true) {
+      setNotice("Destination folder is read-only.")
+      return
+    }
+    if (message.mailboxIds.length === 1 && message.mailboxIds[0] === destination.id) return
+
+    const nextMailboxIds = [destination.id]
+    setMailByAccount((current) => updateMessageMailboxIds(current, message.accountId, messageKey, nextMailboxIds))
+    try {
+      const { client, primaryMailAccountId } = await createMailClient(account, auth)
+      const jmapAccountId = message.jmapAccountId ?? primaryMailAccountId
+      await setRemoteMessageMailboxIds(client, jmapAccountId, message.id, message.mailboxIds, destination.serverId)
+    } catch (error) {
+      setMailByAccount((current) => updateMessageMailboxIds(current, message.accountId, messageKey, message.mailboxIds))
+      setNotice(connectivityErrorMessage(error))
     }
   }
 
@@ -739,7 +806,7 @@ export default function App() {
     setAccountAuth((current) => ({ ...current, [account.id]: auth }))
     setSelectedFolder("unified:inbox")
     setView("mail")
-    setNotice("Account verified and added. Unified Inbox is selected.")
+    showNotice("Account verified and added. Unified Inbox is selected.", 10_000)
     void storeAccountAuth(account, auth, vaultMode === "fallback" ? masterPassword : undefined)
       .then((mode) => setVaultMode(mode))
       .catch((error) => setNotice(error instanceof Error ? error.message : "Could not save credentials."))
@@ -788,6 +855,13 @@ export default function App() {
     if (isMobile) setFolderDrawerOpen(false)
   }
 
+  const showNotice = (message: string, autoDismissMs?: number) => {
+    setNotice(message)
+    if (autoDismissMs !== undefined) {
+      globalThis.setTimeout(() => setNotice((current) => current === message ? undefined : current), autoDismissMs)
+    }
+  }
+
   if (accounts.length === 0) return <FirstRunSetup onAccountVerified={addFirstAccount} />
 
   return (
@@ -796,15 +870,15 @@ export default function App() {
       {notice === undefined ? null : <Text style={styles.notice}>{notice}</Text>}
       {vaultMode === "locked" ? <VaultUnlock masterPassword={masterPassword} error={vaultError} onChange={setMasterPassword} onUnlock={() => { void unlockFallbackVault() }} /> : null}
       <View style={styles.workspace}>
-        {isMobile ? null : <FolderPane accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} onSelectFolder={selectFolder} />}
+        {isMobile ? null : <FolderPane accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} draggedMessageKey={draggedMessageKey} onSelectFolder={selectFolder} onDropMessageToFolder={(messageKey, folderId) => { setDraggedMessageKey(undefined); void moveMessageToFolder(messageKey, folderId) }} />}
         {isMobile ? null : <PaneDivider minWidth={MIN_FOLDER_PANE_WIDTH} maxWidth={MAX_FOLDER_PANE_WIDTH} minTrailingWidth={view === "mail" ? MIN_MESSAGE_PANE_WIDTH * 2 + DIVIDER_WIDTH : MIN_MESSAGE_PANE_WIDTH} />}
         {view === "settings" ? (
           <Settings accounts={accounts} remoteImageProxyBase={remoteImageProxyBase} onRemoteImageProxyChange={updateRemoteImageProxyBase} onAccountVerified={addSettingsAccount} onDeleteAccount={deleteAccount} />
         ) : (
-          <MailWorkspace accounts={accounts} selectedFolder={selectedFolder} mailByAccount={mailByAccount} selectedMessageKey={selectedMessageKey} mobile={isMobile} loadingMoreFolder={loadingMoreFolder} loadingMessageKey={loadingMessageKey} loadingInlineImageKey={loadingInlineImageKey} loadingAttachmentKey={loadingAttachmentKey} loadingFlagMessageKey={loadingFlagMessageKey} messageBodyError={selectedMessageKey === undefined ? undefined : messageBodyErrors[selectedMessageKey]} inlineImageError={selectedMessageKey === undefined ? undefined : inlineImageErrors[selectedMessageKey]} attachmentError={selectedMessageKey === undefined ? undefined : attachmentErrors[selectedMessageKey]} attachmentPreview={attachmentPreview?.messageKey === selectedMessageKey ? attachmentPreview : undefined} searchDraft={searchDraft} searchState={searchState} remoteImageProxyBase={remoteImageProxyBase} onSearchDraftChange={setSearchDraft} onSearch={() => { void runSearch(searchDraft) }} onClearSearch={clearSearch} onSelectMessage={selectMessage} onCloseMessage={() => setSelectedMessageKey(undefined)} onToggleMessageFlag={(messageKey) => { void toggleMessageFlag(messageKey) }} onLoadInlineImages={(messageKey) => { void loadInlineImages(messageKey) }} onPreviewAttachment={(messageKey, attachment, index) => { void previewAttachment(messageKey, attachment, index) }} onDownloadAttachment={(messageKey, attachment, index) => { void downloadAttachment(messageKey, attachment, index) }} onDownloadAllAttachments={(messageKey) => { void downloadAllAttachments(messageKey) }} onCloseAttachmentPreview={() => setAttachmentPreview(undefined)} onLoadMoreFolder={(folderId) => { void loadMoreFolder(folderId) }} />
+          <MailWorkspace accounts={accounts} selectedFolder={selectedFolder} mailByAccount={mailByAccount} selectedMessageKey={selectedMessageKey} mobile={isMobile} loadingMoreFolder={loadingMoreFolder} loadingMessageKey={loadingMessageKey} loadingInlineImageKey={loadingInlineImageKey} loadingAttachmentKey={loadingAttachmentKey} loadingFlagMessageKeys={loadingFlagMessageKeys} messageBodyError={selectedMessageKey === undefined ? undefined : messageBodyErrors[selectedMessageKey]} inlineImageError={selectedMessageKey === undefined ? undefined : inlineImageErrors[selectedMessageKey]} attachmentError={selectedMessageKey === undefined ? undefined : attachmentErrors[selectedMessageKey]} searchDraft={searchDraft} searchState={searchState} remoteImageProxyBase={remoteImageProxyBase} onSearchDraftChange={setSearchDraft} onSearch={() => { void runSearch(searchDraft) }} onClearSearch={clearSearch} onSelectMessage={selectMessage} onCloseMessage={() => setSelectedMessageKey(undefined)} onToggleMessageFlag={(messageKey) => { void toggleMessageFlag(messageKey) }} onMarkMessageReadState={(messageKey, read) => { void markMessageReadState(messageKey, read) }} onDeleteMessage={(messageKey) => { void deleteMessage(messageKey) }} onStartMessageDrag={setDraggedMessageKey} onEndMessageDrag={() => setDraggedMessageKey(undefined)} onLoadInlineImages={(messageKey) => { void loadInlineImages(messageKey) }} onOpenAttachment={(messageKey, attachment, index) => { void openAttachment(messageKey, attachment, index) }} onDownloadAttachment={(messageKey, attachment, index) => { void downloadAttachment(messageKey, attachment, index) }} onDownloadAllAttachments={(messageKey) => { void downloadAllAttachments(messageKey) }} onLoadMoreFolder={(folderId) => { void loadMoreFolder(folderId) }} />
         )}
       </View>
-      {isMobile && folderDrawerOpen ? <MobileFolderDrawer accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} onSelectFolder={selectFolder} onClose={() => setFolderDrawerOpen(false)} /> : null}
+      {isMobile && folderDrawerOpen ? <MobileFolderDrawer accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} draggedMessageKey={draggedMessageKey} onSelectFolder={selectFolder} onDropMessageToFolder={(messageKey, folderId) => { setDraggedMessageKey(undefined); void moveMessageToFolder(messageKey, folderId) }} onClose={() => setFolderDrawerOpen(false)} /> : null}
     </View>
   )
 }
@@ -873,24 +947,28 @@ function VaultUnlock({ masterPassword, error, onChange, onUnlock }: {
   )
 }
 
-function FolderPane({ accounts, mailByAccount, selectedFolder, onSelectFolder }: {
+function FolderPane({ accounts, mailByAccount, selectedFolder, draggedMessageKey, onSelectFolder, onDropMessageToFolder }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly mailByAccount: Record<string, AccountMailState>
   readonly selectedFolder: string
+  readonly draggedMessageKey: string | undefined
   readonly onSelectFolder: (folderId: string) => void
+  readonly onDropMessageToFolder: (messageKey: string, folderId: string) => void
 }) {
   return (
     <ResizablePane style={folderPaneResizeStyle} fallbackStyle={styles.folderPaneFallback}>
-      <FolderPaneContent accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} onSelectFolder={onSelectFolder} />
+      <FolderPaneContent accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} draggedMessageKey={draggedMessageKey} onSelectFolder={onSelectFolder} onDropMessageToFolder={onDropMessageToFolder} />
     </ResizablePane>
   )
 }
 
-function MobileFolderDrawer({ accounts, mailByAccount, selectedFolder, onSelectFolder, onClose }: {
+function MobileFolderDrawer({ accounts, mailByAccount, selectedFolder, draggedMessageKey, onSelectFolder, onDropMessageToFolder, onClose }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly mailByAccount: Record<string, AccountMailState>
   readonly selectedFolder: string
+  readonly draggedMessageKey: string | undefined
   readonly onSelectFolder: (folderId: string) => void
+  readonly onDropMessageToFolder: (messageKey: string, folderId: string) => void
   readonly onClose: () => void
 }) {
   return (
@@ -901,25 +979,27 @@ function MobileFolderDrawer({ accounts, mailByAccount, selectedFolder, onSelectF
           <Text style={styles.paneHeader}>Folders</Text>
           <TinyButton icon="close" label="Close" onPress={onClose} />
         </View>
-        <FolderPaneContent accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} onSelectFolder={onSelectFolder} hideHeader />
+        <FolderPaneContent accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} draggedMessageKey={draggedMessageKey} onSelectFolder={onSelectFolder} onDropMessageToFolder={onDropMessageToFolder} hideHeader />
       </View>
     </View>
   )
 }
 
-function FolderPaneContent({ accounts, mailByAccount, selectedFolder, hideHeader, onSelectFolder }: {
+function FolderPaneContent({ accounts, mailByAccount, selectedFolder, draggedMessageKey, hideHeader, onSelectFolder, onDropMessageToFolder }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly mailByAccount: Record<string, AccountMailState>
   readonly selectedFolder: string
+  readonly draggedMessageKey: string | undefined
   readonly hideHeader?: boolean
   readonly onSelectFolder: (folderId: string) => void
+  readonly onDropMessageToFolder: (messageKey: string, folderId: string) => void
 }) {
   return (
     <ScrollView style={styles.folderPaneScroll} contentContainerStyle={styles.folderPaneContent}>
       {hideHeader === true ? null : <Text style={styles.paneHeader}>Folders</Text>}
-      <FolderButton label="Unified Inbox" count={countMessagesForFolder(accounts, mailByAccount, "unified:inbox")} active={selectedFolder === "unified:inbox"} onPress={() => onSelectFolder("unified:inbox")} />
-      <FolderButton label="All Sent" count={countMessagesForFolder(accounts, mailByAccount, "unified:sent")} active={selectedFolder === "unified:sent"} onPress={() => onSelectFolder("unified:sent")} />
-      <FolderButton label="All Drafts" count={countMessagesForFolder(accounts, mailByAccount, "unified:drafts")} active={selectedFolder === "unified:drafts"} onPress={() => onSelectFolder("unified:drafts")} />
+      <FolderButton icon="inbox" label="Unified Inbox" count={countMessagesForFolder(accounts, mailByAccount, "unified:inbox")} active={selectedFolder === "unified:inbox"} onPress={() => onSelectFolder("unified:inbox")} />
+      <FolderButton icon="send" label="All Sent" count={countMessagesForFolder(accounts, mailByAccount, "unified:sent")} active={selectedFolder === "unified:sent"} onPress={() => onSelectFolder("unified:sent")} />
+      <FolderButton icon="drafts" label="All Drafts" count={countMessagesForFolder(accounts, mailByAccount, "unified:drafts")} active={selectedFolder === "unified:drafts"} onPress={() => onSelectFolder("unified:drafts")} />
 
       <Text style={styles.sectionHeader}>Accounts</Text>
       {accounts.map((account) => (
@@ -931,7 +1011,8 @@ function FolderPaneContent({ accounts, mailByAccount, selectedFolder, hideHeader
           </View>
           {accountFolders(account, mailByAccount[account.id]).map((folder) => {
             const id = folder.folderId
-            return <FolderButton key={id} label={folder.label} count={folder.count} level={folder.level} badges={folder.badges} active={selectedFolder === id} onPress={() => onSelectFolder(id)} />
+            const dropEnabled = canDropMessageOnFolder(mailByAccount, draggedMessageKey, id)
+            return <FolderButton key={id} icon={folder.icon} label={folder.label} count={folder.count} level={folder.level} badges={folder.badges} active={selectedFolder === id} dropEnabled={dropEnabled} onPress={() => onSelectFolder(id)} onDropMessage={(messageKey) => onDropMessageToFolder(messageKey, id)} />
           })}
         </View>
       ))}
@@ -939,7 +1020,7 @@ function FolderPaneContent({ accounts, mailByAccount, selectedFolder, hideHeader
   )
 }
 
-function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessageKey, mobile, loadingMoreFolder, loadingMessageKey, loadingInlineImageKey, loadingAttachmentKey, loadingFlagMessageKey, messageBodyError, inlineImageError, attachmentError, attachmentPreview, searchDraft, searchState, remoteImageProxyBase, onSearchDraftChange, onSearch, onClearSearch, onSelectMessage, onCloseMessage, onToggleMessageFlag, onLoadInlineImages, onPreviewAttachment, onDownloadAttachment, onDownloadAllAttachments, onCloseAttachmentPreview, onLoadMoreFolder }: {
+function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessageKey, mobile, loadingMoreFolder, loadingMessageKey, loadingInlineImageKey, loadingAttachmentKey, loadingFlagMessageKeys, messageBodyError, inlineImageError, attachmentError, searchDraft, searchState, remoteImageProxyBase, onSearchDraftChange, onSearch, onClearSearch, onSelectMessage, onCloseMessage, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage, onStartMessageDrag, onEndMessageDrag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments, onLoadMoreFolder }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly selectedFolder: string
   readonly mailByAccount: Record<string, AccountMailState>
@@ -949,11 +1030,10 @@ function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessag
   readonly loadingMessageKey: string | undefined
   readonly loadingInlineImageKey: string | undefined
   readonly loadingAttachmentKey: string | undefined
-  readonly loadingFlagMessageKey: string | undefined
+  readonly loadingFlagMessageKeys: Record<string, true>
   readonly messageBodyError: string | undefined
   readonly inlineImageError: string | undefined
   readonly attachmentError: string | undefined
-  readonly attachmentPreview: AttachmentPreviewState | undefined
   readonly searchDraft: string
   readonly searchState: SearchState
   readonly remoteImageProxyBase: string | undefined
@@ -963,17 +1043,22 @@ function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessag
   readonly onSelectMessage: (key: string) => void
   readonly onCloseMessage: () => void
   readonly onToggleMessageFlag: (key: string) => void
+  readonly onMarkMessageReadState: (key: string, read: boolean) => void
+  readonly onDeleteMessage: (key: string) => void
+  readonly onStartMessageDrag: (key: string) => void
+  readonly onEndMessageDrag: () => void
   readonly onLoadInlineImages: (key: string) => void
-  readonly onPreviewAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
+  readonly onOpenAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
   readonly onDownloadAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
   readonly onDownloadAllAttachments: (messageKey: string) => void
-  readonly onCloseAttachmentPreview: () => void
   readonly onLoadMoreFolder: (folderId: string) => void
 }) {
   const title = folderTitle(accounts, mailByAccount, selectedFolder)
   const searchActive = searchState.status !== "idle" && searchState.folderId === selectedFolder
   const messages = searchActive ? messagesForKeys(mailByAccount, searchState.messageKeys) : messagesForFolder(accounts, mailByAccount, selectedFolder)
   const selectedMessage = messages.find((message) => message.key === selectedMessageKey)
+  const [contextMenu, setContextMenu] = useState<MessageContextMenuState | undefined>()
+  const contextMenuMessage = contextMenu === undefined ? undefined : messages.find((message) => message.key === contextMenu.messageKey)
   const syncMessage = mailStatusText(accounts, mailByAccount)
   const canLoadMore = !searchActive && canLoadMoreFolder(accounts, mailByAccount, selectedFolder)
   const loadingMore = loadingMoreFolder === selectedFolder
@@ -991,49 +1076,131 @@ function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessag
       </View>
       {messages.length === 0
         ? <EmptyThreadList accounts={accounts} selectedFolder={selectedFolder} searchActive={searchActive} canLoadMore={canLoadMore} loadingMore={loadingMore} onLoadMore={() => onLoadMoreFolder(selectedFolder)} />
-        : <MessageList accounts={accounts} messages={messages} selectedMessageKey={selectedMessageKey} loadingFlagMessageKey={loadingFlagMessageKey} canLoadMore={canLoadMore} loadingMore={loadingMore} onSelectMessage={onSelectMessage} onToggleMessageFlag={onToggleMessageFlag} onLoadMore={() => onLoadMoreFolder(selectedFolder)} />}
+        : <MessageList accounts={accounts} messages={messages} selectedMessageKey={selectedMessageKey} loadingFlagMessageKeys={loadingFlagMessageKeys} canLoadMore={canLoadMore} loadingMore={loadingMore} onSelectMessage={onSelectMessage} onOpenMessageContextMenu={(messageKey, x, y) => setContextMenu({ messageKey, x, y })} onToggleMessageFlag={onToggleMessageFlag} onStartMessageDrag={onStartMessageDrag} onEndMessageDrag={onEndMessageDrag} onLoadMore={() => onLoadMoreFolder(selectedFolder)} />}
     </>
   )
-  const preview = <MessagePreview message={selectedMessage} loading={selectedMessageKey !== undefined && loadingMessageKey === selectedMessageKey} loadingInlineImages={selectedMessageKey !== undefined && loadingInlineImageKey === selectedMessageKey} loadingAttachmentKey={loadingAttachmentKey} loadingFlagMessageKey={loadingFlagMessageKey} error={messageBodyError} inlineImageError={inlineImageError} attachmentError={attachmentError} attachmentPreview={attachmentPreview} remoteImageProxyBase={remoteImageProxyBase} mobile={mobile} {...(mobile ? { onBack: onCloseMessage } : {})} onToggleMessageFlag={onToggleMessageFlag} onLoadInlineImages={onLoadInlineImages} onPreviewAttachment={onPreviewAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} onCloseAttachmentPreview={onCloseAttachmentPreview} />
-  if (mobile && selectedMessage !== undefined) return <View style={styles.mailWorkspaceMobile}>{preview}</View>
+  const preview = <MessagePreview message={selectedMessage} loading={selectedMessageKey !== undefined && loadingMessageKey === selectedMessageKey} loadingInlineImages={selectedMessageKey !== undefined && loadingInlineImageKey === selectedMessageKey} loadingAttachmentKey={loadingAttachmentKey} loadingFlagMessageKeys={loadingFlagMessageKeys} error={messageBodyError} inlineImageError={inlineImageError} attachmentError={attachmentError} remoteImageProxyBase={remoteImageProxyBase} mobile={mobile} {...(mobile ? { onBack: onCloseMessage } : {})} onToggleMessageFlag={onToggleMessageFlag} onLoadInlineImages={onLoadInlineImages} onOpenAttachment={onOpenAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} />
+  const menu = <MessageContextMenu state={contextMenu} message={contextMenuMessage} onClose={() => setContextMenu(undefined)} onToggleMessageFlag={onToggleMessageFlag} onMarkMessageReadState={onMarkMessageReadState} onDeleteMessage={onDeleteMessage} />
+  if (mobile && selectedMessage !== undefined) return <View style={styles.mailWorkspaceMobile}>{preview}{menu}</View>
   return (
     <View style={[styles.mailWorkspace, mobile && styles.mailWorkspaceMobile]}>
       {mobile ? <View style={styles.threadPaneMobile}>{threadPane}</View> : <ResizablePane style={threadPaneResizeStyle} fallbackStyle={styles.threadPaneFallback}>{threadPane}</ResizablePane>}
       {mobile ? null : <PaneDivider minWidth={MIN_MESSAGE_PANE_WIDTH} minTrailingWidth={MIN_MESSAGE_PANE_WIDTH} />}
       {mobile ? null : preview}
+      {menu}
     </View>
   )
 }
 
-function MessageList({ accounts, messages, selectedMessageKey, loadingFlagMessageKey, canLoadMore, loadingMore, onSelectMessage, onToggleMessageFlag, onLoadMore }: {
+function MessageList({ accounts, messages, selectedMessageKey, loadingFlagMessageKeys, canLoadMore, loadingMore, onSelectMessage, onOpenMessageContextMenu, onToggleMessageFlag, onStartMessageDrag, onEndMessageDrag, onLoadMore }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly messages: readonly MailMessage[]
   readonly selectedMessageKey: string | undefined
-  readonly loadingFlagMessageKey: string | undefined
+  readonly loadingFlagMessageKeys: Record<string, true>
   readonly canLoadMore: boolean
   readonly loadingMore: boolean
   readonly onSelectMessage: (key: string) => void
+  readonly onOpenMessageContextMenu: (key: string, x: number, y: number) => void
   readonly onToggleMessageFlag: (key: string) => void
+  readonly onStartMessageDrag: (key: string) => void
+  readonly onEndMessageDrag: () => void
   readonly onLoadMore: () => void
 }) {
+  const openContextMenu = (message: MailMessage, x: number, y: number) => {
+    onOpenMessageContextMenu(message.key, x, y)
+  }
   return (
-    <ScrollView style={styles.messageList}>
-      {messages.map((message) => (
-        <Pressable key={message.key} onPress={() => onSelectMessage(message.key)} style={[styles.clickable, styles.messageRow, message.flagState === "flagged" && styles.messageRowFlagged, message.flagState === "done" && styles.messageRowDone, selectedMessageKey === message.key && styles.messageRowActive]}>
-          <View style={styles.messageRowTop}>
-            <Text numberOfLines={1} style={styles.messageSender}>{message.from || accountEmailForMessage(accounts, message)}</Text>
-            <View style={styles.messageRowActions}>
-              <Text style={styles.messageDate}>{formatMessageDate(message.receivedAt ?? message.sentAt)}</Text>
-              <FlagButton flagState={message.flagState} loading={loadingFlagMessageKey === message.key} onPress={() => onToggleMessageFlag(message.key)} />
-            </View>
-          </View>
-          <Text numberOfLines={1} style={styles.messageSubject}>{message.subject || "(no subject)"}</Text>
-          <Text numberOfLines={1} style={styles.messageMetaText}>To {message.to.length === 0 ? "Undisclosed recipients" : message.to.join(", ")}</Text>
-          {messageAttachmentLabels(message).length === 0 ? null : <Text style={styles.attachmentText}>{messageAttachmentLabels(message).join(" · ")}</Text>}
-        </Pressable>
-      ))}
-      {canLoadMore ? <View style={styles.loadMoreArea}><SecondaryButton label="Load more" loading={loadingMore} disabled={loadingMore} onPress={onLoadMore} /></View> : null}
-    </ScrollView>
+    <View style={styles.messageListShell}>
+      <ScrollView style={styles.messageList}>
+        {messages.map((message) => {
+          const row = (
+            <Pressable onLongPress={(event) => { onSelectMessage(message.key); openContextMenu(message, event.nativeEvent.pageX, event.nativeEvent.pageY) }} onPress={() => onSelectMessage(message.key)} style={[styles.clickable, styles.messageRow, message.flagState === "flagged" && styles.messageRowFlagged, message.flagState === "done" && styles.messageRowDone, selectedMessageKey === message.key && styles.messageRowActive, selectedMessageKey === message.key && message.flagState === "flagged" && styles.messageRowFlaggedActive, selectedMessageKey === message.key && message.flagState === "done" && styles.messageRowDoneActive]}>
+              <View style={styles.messageRowTop}>
+                <View style={styles.messageSenderGroup}>
+                  {message.read ? null : <View style={styles.unreadMarker} />}
+                  <Text numberOfLines={1} style={[styles.messageSender, message.read && styles.messageSenderRead]}>{message.from || accountEmailForMessage(accounts, message)}</Text>
+                </View>
+                <View style={styles.messageRowActions}>
+                  <Text style={styles.messageDate}>{formatMessageDate(message.receivedAt ?? message.sentAt)}</Text>
+                  <FlagButton flagState={message.flagState} loading={loadingFlagMessageKeys[message.key] === true} onPress={() => onToggleMessageFlag(message.key)} />
+                </View>
+              </View>
+              <Text numberOfLines={1} style={[styles.messageSubject, message.read && styles.messageSubjectRead]}>{message.subject || "(no subject)"}</Text>
+              <Text numberOfLines={1} style={styles.messageMetaText}>To {message.to.length === 0 ? "Undisclosed recipients" : message.to.join(", ")}</Text>
+              {messageAttachmentLabels(message).length === 0 ? null : <Text style={styles.attachmentText}>{messageAttachmentLabels(message).join(" · ")}</Text>}
+            </Pressable>
+          )
+          if (Platform.OS !== "web") return <View key={message.key}>{row}</View>
+          return createElement("div", {
+            key: message.key,
+            draggable: true,
+            onContextMenu: (event: ReactMouseEvent<HTMLElement>) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onSelectMessage(message.key)
+              openContextMenu(message, event.clientX, event.clientY)
+            },
+            onDragStart: (event: ReactDragEvent<HTMLElement>) => {
+              event.dataTransfer.effectAllowed = "move"
+              event.dataTransfer.setData("application/x-jmapfe-message-key", message.key)
+              event.dataTransfer.setData("text/plain", message.key)
+              onStartMessageDrag(message.key)
+            },
+            onDragEnd: onEndMessageDrag,
+            style: { cursor: "grab" },
+          }, row)
+        })}
+        {canLoadMore ? <View style={styles.loadMoreArea}><SecondaryButton label="Load more" loading={loadingMore} disabled={loadingMore} onPress={onLoadMore} /></View> : null}
+      </ScrollView>
+    </View>
+  )
+}
+
+function MessageContextMenu({ state, message, onClose, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage }: {
+  readonly state: MessageContextMenuState | undefined
+  readonly message: MailMessage | undefined
+  readonly onClose: () => void
+  readonly onToggleMessageFlag: (key: string) => void
+  readonly onMarkMessageReadState: (key: string, read: boolean) => void
+  readonly onDeleteMessage: (key: string) => void
+}) {
+  const { width, height } = useWindowDimensions()
+  if (state === undefined || message === undefined) return null
+  const left = clamp(state.x, 8, Math.max(8, width - 218))
+  const top = clamp(state.y, 8, Math.max(8, height - 170))
+  return (
+    <View style={[styles.contextMenuLayer, Platform.OS === "web" && styles.contextMenuLayerWeb]}>
+      <ContextMenuBackdrop onClose={onClose} />
+      <View style={[styles.contextMenu, { left, top }]}>
+        <ContextMenuItem icon={message.read ? "mail" : "drafts"} label={message.read ? "Mark unread" : "Mark read"} onPress={() => { onMarkMessageReadState(message.key, !message.read); onClose() }} />
+        <ContextMenuItem icon={flagIconName(message.flagState)} label={flagButtonLabel(message.flagState)} onPress={() => { onToggleMessageFlag(message.key); onClose() }} />
+        <ContextMenuItem icon="delete" label="Delete" destructive onPress={() => { onDeleteMessage(message.key); onClose() }} />
+      </View>
+    </View>
+  )
+}
+
+function ContextMenuBackdrop({ onClose }: { readonly onClose: () => void }) {
+  if (Platform.OS === "web") {
+    return createElement("div", {
+      onClick: onClose,
+      onContextMenu: (event: ReactMouseEvent<HTMLElement>) => {
+        event.preventDefault()
+        onClose()
+      },
+      style: contextMenuBackdropWebStyle,
+    })
+  }
+  return <Pressable accessibilityLabel="Close message menu" style={styles.contextMenuBackdrop} onPress={onClose} />
+}
+
+function ContextMenuItem({ icon, label, destructive, onPress }: { readonly icon: MaterialIconName; readonly label: string; readonly destructive?: boolean; readonly onPress: () => void }) {
+  const color = destructive === true ? "#b91c1c" : "#172033"
+  return (
+    <Pressable onPress={(event) => { event.stopPropagation(); onPress() }} style={[styles.clickable, styles.contextMenuItem]}>
+      <MaterialActionIcon name={icon} size={16} color={color} />
+      <Text style={[styles.contextMenuText, destructive === true && styles.contextMenuTextDestructive]}>{label}</Text>
+    </Pressable>
   )
 }
 
@@ -1052,31 +1219,29 @@ function SearchStatusLine({ searchState, loadedCount }: { readonly searchState: 
 
 function FlagButton({ flagState, loading, onPress }: { readonly flagState: MessageFlagState; readonly loading: boolean; readonly onPress: () => void }) {
   return (
-    <Pressable accessibilityLabel={flagButtonLabel(flagState)} onPress={(event: GestureResponderEvent) => { event.stopPropagation(); if (!loading) onPress() }} style={[styles.clickable, styles.flagButton, flagState !== "unflagged" && styles.flagButtonActive, loading && styles.buttonDisabled]}>
+      <Pressable accessibilityLabel={flagButtonLabel(flagState)} onPress={(event: GestureResponderEvent) => { event.stopPropagation(); if (!loading) onPress() }} style={[styles.clickable, styles.flagButton, loading && styles.buttonDisabled]}>
       {loading ? <Spinner /> : <MaterialActionIcon name={flagIconName(flagState)} size={18} color={flagIconColor(flagState)} />}
     </Pressable>
   )
 }
 
-function MessagePreview({ message, loading, loadingInlineImages, loadingAttachmentKey, loadingFlagMessageKey, error, inlineImageError, attachmentError, attachmentPreview, remoteImageProxyBase, mobile, onBack, onToggleMessageFlag, onLoadInlineImages, onPreviewAttachment, onDownloadAttachment, onDownloadAllAttachments, onCloseAttachmentPreview }: {
+function MessagePreview({ message, loading, loadingInlineImages, loadingAttachmentKey, loadingFlagMessageKeys, error, inlineImageError, attachmentError, remoteImageProxyBase, mobile, onBack, onToggleMessageFlag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments }: {
   readonly message: MailMessage | undefined
   readonly loading: boolean
   readonly loadingInlineImages: boolean
   readonly loadingAttachmentKey: string | undefined
-  readonly loadingFlagMessageKey: string | undefined
+  readonly loadingFlagMessageKeys: Record<string, true>
   readonly error: string | undefined
   readonly inlineImageError: string | undefined
   readonly attachmentError: string | undefined
-  readonly attachmentPreview: AttachmentPreviewState | undefined
   readonly remoteImageProxyBase: string | undefined
   readonly mobile?: boolean
   readonly onBack?: () => void
   readonly onToggleMessageFlag: (key: string) => void
   readonly onLoadInlineImages: (key: string) => void
-  readonly onPreviewAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
+  readonly onOpenAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
   readonly onDownloadAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
   readonly onDownloadAllAttachments: (messageKey: string) => void
-  readonly onCloseAttachmentPreview: () => void
 }) {
   const [remoteContentModes, setRemoteContentModes] = useState<Record<string, RemoteContentMode>>({})
   if (message === undefined) {
@@ -1090,6 +1255,7 @@ function MessagePreview({ message, loading, loadingInlineImages, loadingAttachme
   const requestedRemoteContentMode = remoteContentModes[message.key] ?? "blocked"
   const remoteContentMode = requestedRemoteContentMode === "proxy" && remoteImageProxyBase === undefined ? "blocked" : requestedRemoteContentMode
   const htmlPreview = htmlPreviewForMessage(message, remoteContentMode, remoteImageProxyBase)
+  const plainBodyText = plainBodyTextForMessage(message)
   const attachments = messageAttachmentDisplayParts(message)
   const canLoadInlineImages = (message.inlineImages?.length ?? 0) > 0
   return (
@@ -1098,12 +1264,12 @@ function MessagePreview({ message, loading, loadingInlineImages, loadingAttachme
         <View style={[styles.readerTitleRow, mobile === true && styles.readerTitleRowMobile]}>
           {onBack === undefined ? null : <ToolbarIconButton icon="arrow-back" accessibilityLabel="Back to message list" onPress={onBack} />}
           <Text style={[styles.readerTitle, mobile === true && styles.readerTitleMobile]}>{message.subject || "(no subject)"}</Text>
-          <FlagButton flagState={message.flagState} loading={loadingFlagMessageKey === message.key} onPress={() => onToggleMessageFlag(message.key)} />
+          <FlagButton flagState={message.flagState} loading={loadingFlagMessageKeys[message.key] === true} onPress={() => onToggleMessageFlag(message.key)} />
         </View>
         <Text style={styles.readerMeta}>From {message.from || "Unknown sender"}</Text>
         <Text style={styles.readerMeta}>To {message.to.length === 0 ? "Undisclosed recipients" : message.to.join(", ")}</Text>
         <Text style={styles.readerMeta}>{formatMessageDate(message.receivedAt ?? message.sentAt)}</Text>
-        <AttachmentList messageKey={message.key} attachments={attachments} loadingAttachmentKey={loadingAttachmentKey} onPreviewAttachment={onPreviewAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} />
+        <AttachmentList messageKey={message.key} attachments={attachments} loadingAttachmentKey={loadingAttachmentKey} onOpenAttachment={onOpenAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} />
         {attachmentError === undefined ? null : <Text style={styles.errorText}>{attachmentError}</Text>}
         {loading && message.bodyLoaded !== true ? (
           <View style={styles.readerLoading}><Spinner /></View>
@@ -1112,7 +1278,7 @@ function MessagePreview({ message, loading, loadingInlineImages, loadingAttachme
         ) : message.bodyLoaded !== true ? (
           <Text style={styles.readerBody}>Click a message to load contents.</Text>
         ) : htmlPreview === undefined ? (
-          <Text style={styles.readerBody}>{message.bodyText || "No message body available."}</Text>
+          <Text style={styles.readerBody}>{plainBodyText || "No message body available."}</Text>
         ) : (
           <View style={styles.htmlPreviewBlock}>
             {htmlPreview.blockedInlineImages === 0 ? null : (
@@ -1133,16 +1299,15 @@ function MessagePreview({ message, loading, loadingInlineImages, loadingAttachme
           </View>
         )}
       </ScrollView>
-      <AttachmentPreviewModal preview={attachmentPreview} onClose={onCloseAttachmentPreview} />
     </>
   )
 }
 
-function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onPreviewAttachment, onDownloadAttachment, onDownloadAllAttachments }: {
+function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments }: {
   readonly messageKey: string
   readonly attachments: readonly EmailAttachmentPart[]
   readonly loadingAttachmentKey: string | undefined
-  readonly onPreviewAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
+  readonly onOpenAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
   readonly onDownloadAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
   readonly onDownloadAllAttachments: (messageKey: string) => void
 }) {
@@ -1158,9 +1323,8 @@ function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onPrevi
         {attachments.map((attachment, index) => {
           const actionKey = attachmentActionKey(messageKey, attachment, index)
           const loading = loadingAttachmentKey === actionKey
-          const previewable = canPreviewAttachment(attachment)
           return (
-            <Pressable key={attachmentKey(attachment, index)} onPress={previewable && loadingAttachmentKey === undefined ? () => onPreviewAttachment(messageKey, attachment, index) : undefined} style={[styles.attachmentItem, previewable && styles.clickable]}>
+            <Pressable key={attachmentKey(attachment, index)} onPress={loadingAttachmentKey === undefined ? () => onOpenAttachment(messageKey, attachment, index) : undefined} style={[styles.attachmentItem, styles.clickable]}>
               <View style={styles.attachmentFileText}>
                 <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
                 <Text numberOfLines={1} style={styles.attachmentMeta}>{attachmentMetaText(attachment)}</Text>
@@ -1172,30 +1336,6 @@ function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onPrevi
             </Pressable>
           )
         })}
-      </View>
-    </View>
-  )
-}
-
-function AttachmentPreviewModal({ preview, onClose }: { readonly preview: AttachmentPreviewState | undefined; readonly onClose: () => void }) {
-  if (preview === undefined) return null
-  return (
-    <View style={styles.modalBackdrop}>
-      <Pressable style={[styles.clickable, styles.modalScrim]} onPress={onClose} />
-      <View style={styles.attachmentModal}>
-        <View style={styles.attachmentPreviewHeader}>
-          <Text numberOfLines={1} style={styles.attachmentPreviewTitle}>{preview.name}</Text>
-          <TinyButton icon="close" label="Close" onPress={onClose} />
-        </View>
-        {attachmentIsImage(preview) ? (
-          <View style={styles.attachmentPreviewBody}>{createElement("img", { alt: preview.name, src: preview.objectUrl, style: attachmentPreviewImageStyle })}</View>
-        ) : attachmentIsPdf(preview) ? (
-          <View style={styles.attachmentPreviewBody}>
-            {createElement("object", { data: preview.objectUrl, type: "application/pdf", style: attachmentPreviewObjectStyle, title: preview.name }, createElement("a", { href: preview.objectUrl, download: preview.name }, "Open PDF"))}
-          </View>
-        ) : (
-          <Text style={styles.readerCopy}>No built-in preview for this attachment type.</Text>
-        )}
       </View>
     </View>
   )
@@ -1228,16 +1368,41 @@ function MaterialActionIcon({ name, size, color }: { readonly name: MaterialIcon
 
 function HtmlPreview({ html }: { readonly html: string }) {
   const [height, setHeight] = useState(1)
-  useEffect(() => setHeight(1), [html])
+  const frameRef = useRef<HTMLIFrameElement | null>(null)
+  useEffect(() => {
+    if (Platform.OS !== "web") return
+    setHeight(1)
+    const frame = frameRef.current
+    if (frame === null) return
+    let observer: ResizeObserver | undefined
+    let cancelled = false
+    const resize = () => {
+      if (!cancelled) resizeHtmlPreviewFrame(frame, setHeight)
+    }
+    const watchFrame = () => {
+      resize()
+      const document = frame.contentDocument
+      if (document === null || typeof ResizeObserver === "undefined") return
+      observer?.disconnect()
+      observer = new ResizeObserver(resize)
+      observer.observe(document.documentElement)
+      observer.observe(document.body)
+    }
+    frame.addEventListener("load", watchFrame)
+    watchFrame()
+    const timeout = globalThis.setTimeout(resize, 50)
+    return () => {
+      cancelled = true
+      frame.removeEventListener("load", watchFrame)
+      observer?.disconnect()
+      globalThis.clearTimeout(timeout)
+    }
+  }, [html])
   if (Platform.OS !== "web") return <Text style={styles.readerBody}>{stripHtml(html)}</Text>
   return createElement("iframe", {
-    onLoad: (event) => {
-      const frame = event.currentTarget as HTMLIFrameElement
-      resizeHtmlPreviewFrame(frame, setHeight)
-      globalThis.setTimeout(() => resizeHtmlPreviewFrame(frame, setHeight), 50)
-    },
+    ref: frameRef,
     referrerPolicy: "no-referrer",
-    sandbox: "",
+    sandbox: "allow-same-origin",
     scrolling: "no",
     srcDoc: html,
     style: { ...htmlPreviewFrameStyle, height },
@@ -1252,14 +1417,24 @@ function resizeHtmlPreviewFrame(frame: HTMLIFrameElement, setHeight: (height: nu
   setHeight(nextHeight)
 }
 
+function plainBodyTextForMessage(message: MailMessage): string {
+  if (message.bodyHtml !== undefined && !htmlHasTags(message.bodyHtml)) return stripHtml(message.bodyHtml)
+  return message.bodyText ?? ""
+}
+
 function htmlPreviewForMessage(message: MailMessage, remoteContentMode: RemoteContentMode, remoteImageProxyBase: string | undefined): { readonly html: string; readonly blockedRemoteUrls: number; readonly blockedInlineImages: number } | undefined {
   if (message.bodyHtml === undefined || message.bodyHtml.trim().length === 0) return undefined
+  if (!htmlHasTags(message.bodyHtml)) return undefined
   const sanitized = sanitizeEmailHtml(message.bodyHtml, remoteContentMode, remoteImageProxyBase, message.inlineImageDataByCid ?? {})
   return {
     html: htmlPreviewDocument(sanitized.html, remoteContentMode, remoteImageProxyBase),
     blockedRemoteUrls: sanitized.blockedRemoteUrls,
     blockedInlineImages: sanitized.blockedInlineImages,
   }
+}
+
+function htmlHasTags(value: string): boolean {
+  return /<\s*\/?\s*[a-z][^>]*>/i.test(value)
 }
 
 function sanitizeEmailHtml(html: string, remoteContentMode: RemoteContentMode, proxyBase: string | undefined, inlineImageDataByCid: Record<string, string>): { readonly html: string; readonly blockedRemoteUrls: number; readonly blockedInlineImages: number } {
@@ -1431,6 +1606,7 @@ function escapeHtmlAttribute(value: string): string {
 interface PaneFolder {
   readonly folderId: string
   readonly label: string
+  readonly icon: MaterialIconName
   readonly count?: number | undefined
   readonly level?: number | undefined
   readonly badges?: readonly string[] | undefined
@@ -1439,9 +1615,10 @@ interface PaneFolder {
 function accountFolders(account: ConfiguredAccount, mail: AccountMailState | undefined): PaneFolder[] {
   if (mail?.mailboxes.length) {
     return flattenMailboxTree(mail.mailboxes).map(({ mailbox, level }) => ({
-        folderId: mailboxFolderId(account.id, mailbox.id),
-        label: mailbox.name,
-        count: mailbox.totalEmails ?? countMessagesForMailbox(mail, mailbox),
+      folderId: mailboxFolderId(account.id, mailbox.id),
+      label: mailbox.name,
+      icon: folderIconForMailbox(mailbox),
+      count: mailbox.totalEmails ?? countMessagesForMailbox(mail, mailbox),
         level,
         badges: mailboxBadges(mailbox),
       }))
@@ -1457,6 +1634,21 @@ function mailboxBadges(mailbox: MailboxSummary): string[] {
     mailbox.isSubscribed === false ? "unsubscribed" : undefined,
     mailbox.myRights?.mayReadItems === false ? "no access" : undefined,
   ].filter((badge): badge is string => badge !== undefined)
+}
+
+function folderIconForMailbox(mailbox: MailboxSummary): MaterialIconName {
+  if (mailbox.isSynthetic === true) return "folder"
+  return folderIconForRole(mailbox.role)
+}
+
+function folderIconForRole(role: string | undefined): MaterialIconName {
+  if (role === "inbox") return "inbox"
+  if (role === "sent") return "send"
+  if (role === "drafts") return "drafts"
+  if (role === "archive") return "archive"
+  if (role === "trash") return "delete"
+  if (role === "junk") return "report"
+  return "folder"
 }
 
 function accountEmailForMessage(accounts: readonly ConfiguredAccount[], message: MailMessage): string {
@@ -1808,6 +2000,7 @@ function toMailMessageMetadata(account: ConfiguredAccount, jmapAccountId: string
   const id = stringValue(email.id) ?? `${account.id}:unknown`
   const to = addressList(email.to)
   const attachments = emailAttachmentParts(email)
+  const keywords = keywordRecord(email.keywords)
   return {
     id,
     key: `${account.id}:${encodeURIComponent(jmapAccountId)}:${id}`,
@@ -1816,7 +2009,8 @@ function toMailMessageMetadata(account: ConfiguredAccount, jmapAccountId: string
     jmapAccountId,
     mailboxIds: mailboxIdList(email.mailboxIds).map((mailboxId) => namespaceJmapMailboxId(jmapAccountId, mailboxId)),
     subject: stringValue(email.subject) ?? "",
-    flagState: messageFlagState(keywordRecord(email.keywords)),
+    read: messageReadState(keywords),
+    flagState: messageFlagState(keywords),
     from: addressList(email.from)[0] ?? "",
     to,
     ...(stringValue(email.receivedAt) === undefined ? {} : { receivedAt: stringValue(email.receivedAt) as string }),
@@ -1927,6 +2121,10 @@ function messageFlagState(keywords: Record<string, unknown>): MessageFlagState {
   return "unflagged"
 }
 
+function messageReadState(keywords: Record<string, unknown>): boolean {
+  return keywords.$seen === true
+}
+
 function nextMessageFlagState(flagState: MessageFlagState): MessageFlagState {
   if (flagState === "unflagged") return "flagged"
   if (flagState === "flagged") return "done"
@@ -1959,6 +2157,46 @@ async function setRemoteMessageFlagState(client: JmapClient, accountId: string, 
     },
   }, "ui-email-flag-set"))
   if (keywordRecord(args.notUpdated)[messageId] !== undefined) throw new Error("Server rejected message flag update.")
+}
+
+async function setRemoteMessageReadState(client: JmapClient, accountId: string, messageId: string, read: boolean): Promise<void> {
+  const args = responseArgs(await client.call([CAP_MAIL], "Email/set", {
+    accountId,
+    update: {
+      [messageId]: { "keywords/$seen": read ? true : null },
+    },
+  }, "ui-email-read-set"))
+  if (keywordRecord(args.notUpdated)[messageId] !== undefined) throw new Error("Server rejected message read update.")
+}
+
+async function setRemoteMessageMailboxIds(client: JmapClient, accountId: string, messageId: string, currentMailboxIds: readonly string[], destinationMailboxId: string): Promise<void> {
+  const args = responseArgs(await client.call([CAP_MAIL], "Email/set", {
+    accountId,
+    update: {
+      [messageId]: mailboxIdsPatch(accountId, currentMailboxIds, destinationMailboxId),
+    },
+  }, "ui-email-mailbox-set"))
+  if (keywordRecord(args.notUpdated)[messageId] !== undefined) throw new Error("Server rejected message move.")
+}
+
+function mailboxIdsPatch(jmapAccountId: string, currentMailboxIds: readonly string[], destinationMailboxId: string): JsonObject {
+  const patch: JsonObject = {}
+  for (const mailboxId of currentMailboxIds) {
+    const serverId = mailboxServerIdFromNamespaced(mailboxId, jmapAccountId)
+    if (serverId !== undefined && serverId !== destinationMailboxId) patch[`mailboxIds/${jmapPatchPathSegment(serverId)}`] = null
+  }
+  patch[`mailboxIds/${jmapPatchPathSegment(destinationMailboxId)}`] = true
+  return patch
+}
+
+function mailboxServerIdFromNamespaced(mailboxId: string, jmapAccountId: string): string | undefined {
+  const prefix = `${encodeURIComponent(jmapAccountId)}:`
+  if (!mailboxId.startsWith(prefix)) return undefined
+  return decodeURIComponent(mailboxId.slice(prefix.length))
+}
+
+function jmapPatchPathSegment(value: string): string {
+  return value.replace(/~/g, "~0").replace(/\//g, "~1")
 }
 
 function flagStatePatch(flagState: MessageFlagState): JsonObject {
@@ -1995,18 +2233,6 @@ function attachmentActionKey(messageKey: string, attachment: EmailAttachmentPart
   return `${messageKey}:attachment:${attachmentKey(attachment, index)}`
 }
 
-function canPreviewAttachment(attachment: EmailAttachmentPart): boolean {
-  return attachmentIsImage(attachment) || attachmentIsPdf(attachment)
-}
-
-function attachmentIsImage(attachment: { readonly type: string }): boolean {
-  return attachment.type.toLowerCase().startsWith("image/")
-}
-
-function attachmentIsPdf(attachment: { readonly type: string; readonly name?: string }): boolean {
-  return attachment.type.toLowerCase() === "application/pdf" || attachment.name?.toLowerCase().endsWith(".pdf") === true
-}
-
 async function downloadAttachmentBlob(transport: FetchJmapTransport, accountId: string, attachment: EmailAttachmentPart): Promise<BlobLike> {
   if (attachment.blobId === undefined) throw new Error("Attachment has no blob id.")
   try {
@@ -2018,13 +2244,37 @@ async function downloadAttachmentBlob(transport: FetchJmapTransport, accountId: 
 }
 
 function blobLikeToObjectUrl(blob: BlobLike, type: string): string {
-  if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") throw new Error("Attachment preview is only available in a browser.")
+  if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") throw new Error("Attachment opening is only available in a browser.")
   return URL.createObjectURL(blobLikeToBlob(blob, type))
 }
 
-function revokeAttachmentPreview(preview: AttachmentPreviewState | undefined): void {
-  if (preview === undefined || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return
-  URL.revokeObjectURL(preview.objectUrl)
+async function openAttachmentBlob(name: string, type: string, blobLike: BlobLike): Promise<void> {
+  const safeName = safeAttachmentFileName(name)
+  const blob = blobLikeToBlob(blobLike, type)
+  if (isTauriRuntime()) {
+    await invoke<void>("open_file", {
+      req: {
+        suggestedName: safeName,
+        bytesBase64: base64Bytes(new Uint8Array(await blob.arrayBuffer())),
+      },
+    })
+    return
+  }
+  openBlobInNewTab(blob)
+}
+
+function openBlobInNewTab(blob: Blob): void {
+  const objectUrl = blobLikeToObjectUrl(blob, blob.type)
+  if (typeof globalThis.open !== "function") {
+    URL.revokeObjectURL(objectUrl)
+    throw new Error("Attachment opening is only available in a browser.")
+  }
+  const opened = globalThis.open(objectUrl, "_blank", "noopener,noreferrer")
+  if (opened === null) {
+    URL.revokeObjectURL(objectUrl)
+    throw new Error("Attachment popup was blocked.")
+  }
+  globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
 }
 
 async function promptSaveFile(name: string, type: string): Promise<SaveFileTarget> {
@@ -2211,6 +2461,27 @@ function findMessageByKey(mailByAccount: Record<string, AccountMailState>, messa
   return undefined
 }
 
+function findMailboxByRole(mail: AccountMailState | undefined, jmapAccountId: string | undefined, role: string): MailboxSummary | undefined {
+  return mail?.mailboxes.find((mailbox) => mailbox.role === role
+    && mailbox.serverId !== undefined
+    && mailbox.isSynthetic !== true
+    && (jmapAccountId === undefined || mailbox.jmapAccountId === jmapAccountId))
+}
+
+function canDropMessageOnFolder(mailByAccount: Record<string, AccountMailState>, messageKey: string | undefined, folderId: string): boolean {
+  if (messageKey === undefined) return false
+  const folder = parseMailboxFolderId(folderId)
+  if (folder === undefined) return false
+  const message = findMessageByKey(mailByAccount, messageKey)
+  const destination = mailByAccount[folder.accountId]?.mailboxes.find((mailbox) => mailbox.id === folder.mailboxId)
+  if (message === undefined || destination === undefined) return false
+  if (message.accountId !== folder.accountId) return false
+  if (destination.serverId === undefined || destination.isSynthetic === true) return false
+  if (destination.jmapAccountId !== undefined && destination.jmapAccountId !== message.jmapAccountId) return false
+  if (destination.myRights?.mayAddItems === false || destination.jmapAccountIsReadOnly === true) return false
+  return !(message.mailboxIds.length === 1 && message.mailboxIds[0] === destination.id)
+}
+
 function canLoadMoreFolder(accounts: readonly ConfiguredAccount[], mailByAccount: Record<string, AccountMailState>, folderId: string): boolean {
   return folderLoadTargets(accounts, mailByAccount, folderId).some(folderTargetHasMore)
 }
@@ -2364,6 +2635,37 @@ function updateMessageFlagState(mailByAccount: Record<string, AccountMailState>,
       messages: state.messages.map((message) => message.key === messageKey ? { ...message, flagState } : message),
     },
   }
+}
+
+function updateMessageReadState(mailByAccount: Record<string, AccountMailState>, accountId: string, messageKey: string, read: boolean): Record<string, AccountMailState> {
+  const state = mailByAccount[accountId]
+  if (state === undefined) return mailByAccount
+  return {
+    ...mailByAccount,
+    [accountId]: {
+      ...state,
+      messages: state.messages.map((message) => message.key === messageKey ? { ...message, read } : message),
+    },
+  }
+}
+
+function updateMessageMailboxIds(mailByAccount: Record<string, AccountMailState>, accountId: string, messageKey: string, mailboxIds: readonly string[]): Record<string, AccountMailState> {
+  const state = mailByAccount[accountId]
+  if (state === undefined) return mailByAccount
+  return {
+    ...mailByAccount,
+    [accountId]: {
+      ...state,
+      messages: state.messages.map((message) => message.key === messageKey ? { ...message, mailboxIds } : message),
+    },
+  }
+}
+
+function canSetMessageReadState(mail: AccountMailState | undefined, message: MailMessage): boolean {
+  if (mail === undefined) return true
+  const messageMailboxIds = new Set(message.mailboxIds)
+  const containingMailboxes = mail.mailboxes.filter((mailbox) => messageMailboxIds.has(mailbox.id))
+  return containingMailboxes.every((mailbox) => mailbox.jmapAccountIsReadOnly !== true && mailbox.myRights?.maySetSeen !== false)
 }
 
 function inlineImagesToLoad(message: MailMessage): InlineImagePart[] {
@@ -3282,9 +3584,10 @@ function AccountSummary({ account }: { readonly account: ConfiguredAccount }) {
   )
 }
 
-function FolderButton({ label, count, level = 0, badges = [], active, onPress }: { readonly label: string; readonly count?: number | undefined; readonly level?: number | undefined; readonly badges?: readonly string[] | undefined; readonly active: boolean; readonly onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={[styles.clickable, styles.folderButton, level > 0 && { paddingLeft: 6 + level * 12 }, active && styles.folderButtonActive]}>
+function FolderButton({ icon, label, count, level = 0, badges = [], active, dropEnabled, onPress, onDropMessage }: { readonly icon: MaterialIconName; readonly label: string; readonly count?: number | undefined; readonly level?: number | undefined; readonly badges?: readonly string[] | undefined; readonly active: boolean; readonly dropEnabled?: boolean; readonly onPress: () => void; readonly onDropMessage?: (messageKey: string) => void }) {
+  const button = (
+    <Pressable onPress={onPress} style={[styles.clickable, styles.folderButton, level > 0 && { paddingLeft: 6 + level * 12 }, active && styles.folderButtonActive, dropEnabled === true && styles.folderButtonDropTarget]}>
+      <MaterialActionIcon name={icon} size={16} color={active ? "#074a91" : "#64748b"} />
       <View style={styles.folderLabelGroup}>
         <Text numberOfLines={1} style={[styles.folderButtonText, active && styles.folderButtonTextActive]}>{label}</Text>
         {badges.length === 0 ? null : <Text numberOfLines={1} style={[styles.folderBadgeText, active && styles.folderButtonTextActive]}>{badges.join(" · ")}</Text>}
@@ -3292,6 +3595,18 @@ function FolderButton({ label, count, level = 0, badges = [], active, onPress }:
       {count === undefined ? null : <Text style={[styles.folderCount, active && styles.folderButtonTextActive]}>{count}</Text>}
     </Pressable>
   )
+  if (Platform.OS !== "web" || dropEnabled !== true || onDropMessage === undefined) return button
+  return createElement("div", {
+    onDragOver: (event: ReactDragEvent<HTMLElement>) => {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = "move"
+    },
+    onDrop: (event: ReactDragEvent<HTMLElement>) => {
+      event.preventDefault()
+      const messageKey = event.dataTransfer.getData("application/x-jmapfe-message-key") || event.dataTransfer.getData("text/plain")
+      if (messageKey.length > 0) onDropMessage(messageKey)
+    },
+  }, button)
 }
 
 function ToolbarButton({ icon, label, active, onPress }: { readonly icon: MaterialIconName; readonly label: string; readonly active?: boolean; readonly onPress: () => void }) {
@@ -3452,8 +3767,9 @@ async function tauriBridgeFetch(input: RequestInfo | URL, init?: RequestInit): P
 }
 
 function isTauriRuntime(): boolean {
-  const runtime = globalThis as typeof globalThis & { readonly __TAURI_INTERNALS__?: unknown; readonly __TAURI__?: unknown }
-  return runtime.__TAURI_INTERNALS__ !== undefined || runtime.__TAURI__ !== undefined
+  if (tauriRuntimeAvailable()) return true
+  const runtime = globalThis as typeof globalThis & { readonly __TAURI_INTERNALS__?: unknown; readonly __TAURI__?: unknown; readonly isTauri?: unknown }
+  return runtime.__TAURI_INTERNALS__ !== undefined || runtime.__TAURI__ !== undefined || runtime.isTauri === true
 }
 
 function requestUrl(input: RequestInfo | URL): string {
@@ -3679,7 +3995,8 @@ function parseCachedMailMessage(value: unknown): MailMessage[] {
   const input = value as Record<string, unknown>
   const attachments = Array.isArray(input.attachments) ? input.attachments.filter(isEmailAttachmentPart) : []
   const flagState = isMessageFlagState(input.flagState) ? input.flagState : "unflagged"
-  const normalized = { ...input, attachments, flagState }
+  const read = typeof input.read === "boolean" ? input.read : true
+  const normalized = { ...input, attachments, flagState, read }
   return isMailMessage(normalized) ? [normalized] : []
 }
 
@@ -3709,6 +4026,7 @@ function isMailMessage(value: unknown): value is MailMessage {
     (message.jmapAccountId === undefined || typeof message.jmapAccountId === "string") &&
     Array.isArray(message.mailboxIds) && message.mailboxIds.every((mailboxId) => typeof mailboxId === "string") &&
     typeof message.subject === "string" &&
+    typeof message.read === "boolean" &&
     isMessageFlagState(message.flagState) &&
     typeof message.from === "string" &&
     Array.isArray(message.to) && message.to.every((address) => typeof address === "string") &&
@@ -3742,7 +4060,7 @@ const styles = StyleSheet.create({
   toolbarActionsMobile: { flexDirection: "row", flexWrap: "nowrap", gap: 8, justifyContent: "flex-start", paddingRight: 10 },
   toolbarButton: { alignItems: "center", backgroundColor: "#ffffff", borderColor: "#c5d2e0", borderWidth: 1, flexDirection: "row", flexShrink: 0, gap: 4, justifyContent: "center", paddingHorizontal: 8, paddingVertical: 5 },
   toolbarButtonActive: { backgroundColor: "#dbeafe", borderColor: "#7aa7e8" },
-  toolbarButtonText: { color: "#25364d", fontSize: 11, fontWeight: "700", lineHeight: 14, textAlign: "center" },
+  toolbarButtonText: { alignSelf: "center", color: "#25364d", fontSize: 11, fontWeight: "700", includeFontPadding: false, lineHeight: 11, paddingTop: 1, textAlign: "center", textAlignVertical: "center" } as unknown as ViewStyle,
   toolbarButtonTextActive: { color: "#0b4f9c" },
   toolbarIconButton: { alignItems: "center", backgroundColor: "#ffffff", borderColor: "#c5d2e0", borderWidth: 1, flexShrink: 0, height: 30, justifyContent: "center", width: 30 },
   notice: { backgroundColor: "#e7f3ff", borderBottomColor: "#b6d7f4", borderBottomWidth: 1, color: "#174d7c", paddingHorizontal: 14, paddingVertical: 8 },
@@ -3761,8 +4079,9 @@ const styles = StyleSheet.create({
   folderPaneContent: { padding: 8, gap: 3 },
   paneHeader: { color: "#344963", fontSize: 13, fontWeight: "800", marginBottom: 8, textTransform: "uppercase" },
   sectionHeader: { color: "#64748b", fontSize: 12, fontWeight: "800", marginTop: 16, marginBottom: 6, textTransform: "uppercase" },
-  folderButton: { flexDirection: "row", gap: 6, justifyContent: "space-between", paddingHorizontal: 6, paddingVertical: 5 },
+  folderButton: { alignItems: "center", flexDirection: "row", gap: 6, justifyContent: "space-between", paddingHorizontal: 6, paddingVertical: 5 },
   folderButtonActive: { backgroundColor: "#cfe5ff" },
+  folderButtonDropTarget: { backgroundColor: "#e0f2fe", borderColor: "#38bdf8", borderWidth: 1 },
   folderLabelGroup: { flex: 1, minWidth: 0 },
   folderButtonText: { color: "#24364e", flex: 1, fontSize: 14, fontWeight: "600", minWidth: 0 },
   folderButtonTextActive: { color: "#074a91" },
@@ -3785,18 +4104,24 @@ const styles = StyleSheet.create({
   searchRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 12 },
   searchRowMobile: { alignItems: "stretch", flexWrap: "wrap" },
   searchInput: { backgroundColor: "#ffffff", borderColor: "#b7c5d4", borderWidth: 1, color: "#111827", flex: 1, fontSize: 14, minWidth: 0, paddingHorizontal: 10, paddingVertical: 8 },
+  messageListShell: { flex: 1, minHeight: 0, position: "relative" },
   messageList: { flex: 1, backgroundColor: "#ffffff" },
   messageRow: { borderBottomColor: "#e2e8f0", borderBottomWidth: 1, gap: 4, paddingHorizontal: 12, paddingVertical: 10 },
   messageRowFlagged: { backgroundColor: "#fffbeb" },
   messageRowDone: { backgroundColor: "#f0fdf4" },
   messageRowActive: { backgroundColor: "#dbeafe" },
+  messageRowFlaggedActive: { backgroundColor: "#fef3c7" },
+  messageRowDoneActive: { backgroundColor: "#dcfce7" },
   messageRowTop: { alignItems: "center", flexDirection: "row", gap: 8, justifyContent: "space-between" },
+  messageSenderGroup: { alignItems: "center", flex: 1, flexDirection: "row", gap: 7, minWidth: 0 },
+  unreadMarker: { backgroundColor: "#0b63ce", height: 7, width: 7 },
   messageSender: { color: "#172033", flex: 1, fontWeight: "800", minWidth: 0 },
+  messageSenderRead: { color: "#334155", fontWeight: "600" },
   messageRowActions: { alignItems: "center", flexDirection: "row", flexShrink: 0, gap: 6 },
   messageDate: { color: "#64748b", flexShrink: 0, fontSize: 11 },
   flagButton: { alignItems: "center", height: 24, justifyContent: "center", width: 24 },
-  flagButtonActive: { backgroundColor: "#fff7ed" },
   messageSubject: { color: "#24364e", fontWeight: "800" },
+  messageSubjectRead: { color: "#475569", fontWeight: "600" },
   messageMetaText: { color: "#64748b", fontSize: 12 },
   messagePreviewText: { color: "#64748b", lineHeight: 18 },
   attachmentText: { color: "#0b4f9c", fontSize: 11, fontWeight: "800", textTransform: "uppercase" },
@@ -3810,15 +4135,16 @@ const styles = StyleSheet.create({
   attachmentMeta: { color: "#64748b", fontSize: 11, marginTop: 2 },
   attachmentActions: { alignItems: "center", flexDirection: "row", flexShrink: 0, gap: 5 },
   attachmentLoadingText: { color: "#64748b", fontSize: 11, fontWeight: "800" },
-  modalBackdrop: { alignItems: "stretch", backgroundColor: "rgba(15, 23, 42, 0.58)", bottom: 0, justifyContent: "stretch", left: 0, padding: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 } as unknown as ViewStyle,
-  modalScrim: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 } as unknown as ViewStyle,
-  attachmentModal: { backgroundColor: "#ffffff", bottom: 0, left: 0, overflow: "hidden", position: "fixed", right: 0, top: 0, zIndex: 1001 } as unknown as ViewStyle,
-  attachmentPreviewHeader: { alignItems: "center", borderBottomColor: "#e2e8f0", borderBottomWidth: 1, flexDirection: "row", gap: 8, justifyContent: "space-between", paddingHorizontal: 10, paddingVertical: 8 },
-  attachmentPreviewTitle: { color: "#172033", flex: 1, fontWeight: "800", minWidth: 0 },
-  attachmentPreviewBody: { alignItems: "center", backgroundColor: "#f8fafc", flex: 1, justifyContent: "center", minHeight: 0, padding: 10 },
   iconButton: { alignItems: "center", backgroundColor: "#ffffff", borderColor: "#b7c5d4", borderWidth: 1, height: 24, justifyContent: "center", width: 24 },
   tinyButton: { alignItems: "center", backgroundColor: "#ffffff", borderColor: "#b7c5d4", borderWidth: 1, flexDirection: "row", gap: 4, paddingHorizontal: 6, paddingVertical: 3 },
   tinyButtonText: { color: "#24364e", fontSize: 10, fontWeight: "800" },
+  contextMenuLayer: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0, zIndex: 1200 },
+  contextMenuLayerWeb: { position: "fixed" } as unknown as ViewStyle,
+  contextMenuBackdrop: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 } as unknown as ViewStyle,
+  contextMenu: { backgroundColor: "#ffffff", borderColor: "#94a3b8", borderWidth: 1, minWidth: 210, paddingVertical: 4, position: "absolute", shadowColor: "#0f172a", shadowOpacity: 0.18, shadowRadius: 12, zIndex: 1201 } as unknown as ViewStyle,
+  contextMenuItem: { alignItems: "center", flexDirection: "row", gap: 9, paddingHorizontal: 12, paddingVertical: 9 },
+  contextMenuText: { color: "#172033", fontSize: 13, fontWeight: "800" },
+  contextMenuTextDestructive: { color: "#b91c1c" },
   loadMoreArea: { alignItems: "center", borderTopColor: "#e2e8f0", borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 14 },
   emptyThreads: { padding: 22 },
   emptyTitle: { color: "#1f2f45", fontSize: 18, fontWeight: "800" },

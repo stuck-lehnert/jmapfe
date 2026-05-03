@@ -1,6 +1,9 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const VAULT_SERVICE: &str = "app.jmapfe.desktop";
 
@@ -48,6 +51,13 @@ struct VaultPutRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveFileRequest {
+    suggested_name: String,
+    bytes_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenFileRequest {
     suggested_name: String,
     bytes_base64: String,
 }
@@ -142,6 +152,60 @@ async fn save_file(req: SaveFileRequest) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn open_file(req: OpenFileRequest) -> Result<(), String> {
+    let bytes = BASE64_STANDARD
+        .decode(req.bytes_base64)
+        .map_err(|err| format!("Invalid file data: {err}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = temporary_attachment_path(&req.suggested_name);
+        std::fs::write(&path, bytes).map_err(|err| format!("Temp file write failed: {err}"))?;
+        open_path(&path)
+    })
+    .await
+    .map_err(|err| format!("File open task failed: {err}"))?
+}
+
+fn temporary_attachment_path(suggested_name: &str) -> PathBuf {
+    let file_name = Path::new(suggested_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("attachment");
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!("jmapfe-{timestamp}-{file_name}"))
+}
+
+fn open_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let path_text = path.to_string_lossy().to_string();
+        Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(&path_text)
+            .spawn()
+            .map_err(|err| format!("File open failed: {err}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("File open failed: {err}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("File open failed: {err}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn jmap_api(req: JmapBridgeRequest) -> Result<JmapBridgeResponse, String> {
     let client = reqwest::Client::new();
     let res = client
@@ -162,7 +226,7 @@ async fn jmap_api(req: JmapBridgeRequest) -> Result<JmapBridgeResponse, String> 
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![jmap_api, jmap_http, vault_get, vault_set, vault_delete, save_file])
+        .invoke_handler(tauri::generate_handler![jmap_api, jmap_http, vault_get, vault_set, vault_delete, save_file, open_file])
         .run(tauri::generate_context!())
         .expect("failed to run jmapfe desktop shell");
 }
