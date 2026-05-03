@@ -7,7 +7,7 @@
     "start": "expo start --web",
     "start:clear": "expo start --web --clear",
     "android": "expo run:android",
-    "web": "expo export --platform web"
+    "web": "expo export --platform web && node ../../scripts/patch-expo-web-dist.mjs dist"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",

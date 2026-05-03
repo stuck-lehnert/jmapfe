@@ -1,7 +1,7 @@
 import { removeConfiguredAccount, type ConfiguredAccount } from "@jmapfe/app-core"
 import { type AuthProvider, type BlobLike } from "@jmapfe/jmap-core"
 import { useEffect, useRef, useState } from "react"
-import { ScrollView, Text, View, useWindowDimensions } from "react-native"
+import { ScrollView, View, useWindowDimensions } from "react-native"
 import { AppStorage, AttachmentBackend, Binary, JmapMail, MailModel, MailState, RuntimeBackend, VaultBackend } from "./backend"
 import { AccountSetupFlow, MailUi, UIShell } from "./components"
 import { MOBILE_BREAKPOINT } from "./layoutConstants"
@@ -608,19 +608,7 @@ export default function App() {
 function FirstRunSetup({ onAccountVerified }: { readonly onAccountVerified: (account: ConfiguredAccount, auth: AuthProvider) => void }) {
   const { width } = useWindowDimensions()
   const mobile = width < MOBILE_BREAKPOINT
-  const content = (
-    <>
-      <View style={[styles.firstRunBrand, mobile && styles.firstRunBrandMobile]}>
-        <Text style={styles.brandMark}>jmapfe</Text>
-        <Text style={[styles.brandTitle, mobile && styles.brandTitleMobile]}>Set up your mail account</Text>
-        <Text style={[styles.brandCopy, mobile && styles.brandCopyMobile]}>
-          This works like Thunderbird: enter your identity, let the app find your mail server, then verify credentials before
-          anything is added locally.
-        </Text>
-      </View>
-      <AccountSetupFlow mode="first-run" fetchImpl={RuntimeBackend.jmapFetch} onAccountVerified={onAccountVerified} />
-    </>
-  )
+  const content = <AccountSetupFlow mode="first-run" fetchImpl={RuntimeBackend.jmapFetch} onAccountVerified={onAccountVerified} />
   if (mobile) return <ScrollView style={styles.firstRunScroll} contentContainerStyle={[styles.firstRunShell, styles.firstRunShellMobile]}>{content}</ScrollView>
   return <View style={styles.firstRunShell}>{content}</View>
 }
