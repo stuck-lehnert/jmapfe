@@ -1,8 +1,11 @@
 import type { ConfiguredAccount } from "@jmapfe/app-core"
 import { EmailHtml, MailModel } from "../../backend"
+import { Theme } from "../../theme"
 import { Ui } from "../primitives"
 
 type AccountMailState = MailModel.AccountMailState
+type ComposeDraft = MailModel.ComposeDraft
+type ComposeMode = MailModel.ComposeMode
 type EmailAttachmentPart = MailModel.EmailAttachmentPart
 type FolderLoadTarget = MailModel.FolderLoadTarget
 type LoadedMessageBatch = MailModel.LoadedMessageBatch
@@ -11,6 +14,8 @@ type MailboxSummary = MailModel.MailboxSummary
 type MessageFlagState = MailModel.MessageFlagState
 type SearchState = MailModel.SearchState
 type MaterialIconName = Ui.MaterialIconName
+
+const C = Theme.colors
 
 export namespace MailUi {
   export interface PaneFolder {
@@ -63,6 +68,98 @@ export namespace MailUi {
 
   export function accountEmailForMessage(accounts: readonly ConfiguredAccount[], message: MailMessage): string {
     return accounts.find((account) => account.id === message.accountId)?.email ?? message.accountName
+  }
+
+  export function composeDraftForMessage(accounts: readonly ConfiguredAccount[], message: MailMessage, mode: Exclude<ComposeMode, "new">): ComposeDraft {
+    const accountEmail = accountEmailForMessage(accounts, message)
+    const replyTo = replyRecipients(message)
+    const primary = mode === "reply-all" ? replyAllPrimaryRecipients(message, accountEmail, replyTo) : replyTo
+    const cc = mode === "reply-all" ? replyAllCcRecipients(message, accountEmail, primary) : []
+    return {
+      accountId: message.accountId,
+      ...(message.jmapAccountId === undefined ? {} : { jmapAccountId: message.jmapAccountId }),
+      mode,
+      to: mode === "forward" ? "" : primary.join(", "),
+      cc: mode === "reply-all" ? cc.join(", ") : "",
+      bcc: "",
+      subject: composeSubject(mode, message.subject),
+      body: composeBody(mode, message),
+      sourceMessageKey: message.key,
+      ...(message.messageId?.[0] === undefined ? {} : { sourceMessageId: message.messageId[0] }),
+      ...(message.references === undefined ? {} : { sourceReferences: message.references }),
+    }
+  }
+
+  export function composeSubject(mode: ComposeMode, subject: string): string {
+    if (mode === "new") return subject
+    const trimmed = subject.trim()
+    if (mode === "forward") return /^(fwd?|fw):/i.test(trimmed) ? trimmed : `Fwd: ${trimmed}`
+    return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`
+  }
+
+  export function composeBody(mode: ComposeMode, message: MailMessage): string {
+    const sourceText = message.bodyText ?? (message.bodyHtml === undefined ? "" : EmailHtml.stripHtml(message.bodyHtml))
+    if (mode === "forward") {
+      return [
+        "",
+        "",
+        "---------- Forwarded message ----------",
+        `From: ${message.from || "Unknown sender"}`,
+        message.to.length === 0 ? undefined : `To: ${message.to.join(", ")}`,
+        `Date: ${formatMessageDate(message.sentAt ?? message.receivedAt)}`,
+        `Subject: ${message.subject || "(no subject)"}`,
+        "",
+        sourceText,
+      ].filter((part): part is string => part !== undefined).join("\n")
+    }
+    return [
+      "",
+      "",
+      `On ${formatMessageDate(message.sentAt ?? message.receivedAt)}, ${message.from || "unknown sender"} wrote:`,
+      quoteText(sourceText),
+    ].join("\n")
+  }
+
+  function replyRecipients(message: MailMessage): string[] {
+    const replyTo = uniqueAddresses(message.replyTo ?? [])
+    if (replyTo.length > 0) return replyTo
+    return message.from.length === 0 ? [] : [message.from]
+  }
+
+  function replyAllPrimaryRecipients(message: MailMessage, accountEmail: string, replyTo: readonly string[]): string[] {
+    const ownKey = addressKey(accountEmail)
+    const primary = uniqueAddresses(replyTo).filter((address) => addressKey(address) !== ownKey)
+    if (primary.length > 0) return primary
+    return uniqueAddresses(message.to).filter((address) => addressKey(address) !== ownKey)
+  }
+
+  function replyAllCcRecipients(message: MailMessage, accountEmail: string, primary: readonly string[]): string[] {
+    const blocked = new Set([addressKey(accountEmail), ...primary.map(addressKey)])
+    return uniqueAddresses([...message.to, ...(message.cc ?? [])]).filter((address) => !blocked.has(addressKey(address)))
+  }
+
+  function uniqueAddresses(addresses: readonly string[]): string[] {
+    const seen = new Set<string>()
+    const unique: string[] = []
+    for (const address of addresses) {
+      const trimmed = address.trim()
+      if (trimmed.length === 0) continue
+      const key = addressKey(trimmed)
+      if (seen.has(key)) continue
+      seen.add(key)
+      unique.push(trimmed)
+    }
+    return unique
+  }
+
+  function addressKey(value: string): string {
+    const match = /<([^<>]+)>/.exec(value)
+    return (match?.[1] ?? value).trim().toLowerCase()
+  }
+
+  function quoteText(value: string): string {
+    if (value.trim().length === 0) return ">"
+    return value.split(/\r?\n/).map((line) => `> ${line}`).join("\n")
   }
 
   export function flattenMailboxTree(mailboxes: readonly MailboxSummary[]): { readonly mailbox: MailboxSummary; readonly level: number }[] {
@@ -356,9 +453,9 @@ export namespace MailUi {
   }
 
   export function flagIconColor(flagState: MessageFlagState): string {
-    if (flagState === "done") return "#166534"
-    if (flagState === "flagged") return "#c2410c"
-    return "#64748b"
+    if (flagState === "done") return C.statusOkText
+    if (flagState === "flagged") return C.warningText
+    return C.textMuted
   }
 
   export function flagButtonLabel(flagState: MessageFlagState): string {

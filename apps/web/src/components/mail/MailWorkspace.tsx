@@ -4,8 +4,10 @@ import { Text, TextInput, View } from "react-native"
 import { MailModel } from "../../backend"
 import { MIN_MESSAGE_PANE_WIDTH, threadPaneResizeStyle } from "../../layoutConstants"
 import { styles } from "../../styles"
+import { Theme } from "../../theme"
 import { PaneDivider, ResizablePane } from "../layout"
 import { Ui } from "../primitives"
+import { ComposePane } from "./ComposePane"
 import { EmptyThreadList } from "./EmptyThreadList"
 import { MessageContextMenu } from "./MessageContextMenu"
 import { MessageList } from "./MessageList"
@@ -14,13 +16,16 @@ import { SearchStatusLine } from "./SearchStatusLine"
 import { MailUi } from "./mailUi"
 
 type AccountMailState = MailModel.AccountMailState
+type ComposeDraft = MailModel.ComposeDraft
+type ComposeMode = MailModel.ComposeMode
 type EmailAttachmentPart = MailModel.EmailAttachmentPart
 type MessageContextMenuState = MailModel.MessageContextMenuState
 type SearchState = MailModel.SearchState
 
 const { Button } = Ui
+const C = Theme.colors
 
-export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessageKey, mobile, loadingMoreFolder, loadingMessageKey, loadingInlineImageKey, loadingAttachmentKey, loadingFlagMessageKeys, messageBodyError, inlineImageError, attachmentError, searchDraft, searchState, remoteImageProxyBase, onSearchDraftChange, onSearch, onClearSearch, onSelectMessage, onCloseMessage, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage, onStartMessageDrag, onEndMessageDrag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments, onLoadMoreFolder }: {
+export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessageKey, mobile, loadingMoreFolder, loadingMessageKey, loadingInlineImageKey, loadingAttachmentKey, loadingFlagMessageKeys, messageBodyError, inlineImageError, attachmentError, searchDraft, searchState, remoteImageProxyBase, composeDraft, composeSending, composeError, onComposeDraftChange, onCloseCompose, onSendCompose, onComposeFromMessage, onSearchDraftChange, onSearch, onClearSearch, onSelectMessage, onCloseMessage, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage, onStartMessageDrag, onEndMessageDrag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments, onLoadMoreFolder }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly selectedFolder: string
   readonly mailByAccount: Record<string, AccountMailState>
@@ -37,6 +42,13 @@ export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selecte
   readonly searchDraft: string
   readonly searchState: SearchState
   readonly remoteImageProxyBase: string | undefined
+  readonly composeDraft: ComposeDraft | undefined
+  readonly composeSending: boolean
+  readonly composeError: string | undefined
+  readonly onComposeDraftChange: (updates: Partial<ComposeDraft>) => void
+  readonly onCloseCompose: () => void
+  readonly onSendCompose: () => void
+  readonly onComposeFromMessage: (messageKey: string, mode: Exclude<ComposeMode, "new">) => void
   readonly onSearchDraftChange: (value: string) => void
   readonly onSearch: () => void
   readonly onClearSearch: () => void
@@ -68,7 +80,7 @@ export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selecte
         <Text style={styles.threadTitle}>{title}</Text>
         {syncMessage.length === 0 ? null : <Text style={styles.threadSubtle}>{syncMessage}</Text>}
         <View style={[styles.searchRow, mobile && styles.searchRowMobile]}>
-          <TextInput value={searchDraft} placeholder="Search this folder on server" placeholderTextColor="#718096" onChangeText={onSearchDraftChange} onSubmitEditing={onSearch} autoCapitalize="none" returnKeyType="search" style={styles.searchInput} />
+          <TextInput value={searchDraft} placeholder="Search this folder on server" placeholderTextColor={C.placeholder} onChangeText={onSearchDraftChange} onSubmitEditing={onSearch} autoCapitalize="none" returnKeyType="search" style={styles.searchInput} />
           <Button kind="hollow" label="Search" loading={searchState.status === "searching"} disabled={searchState.status === "searching"} onPress={onSearch} />
           {searchActive ? <Button kind="ghost" label="Clear" onPress={onClearSearch} /> : null}
         </View>
@@ -79,9 +91,11 @@ export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selecte
         : <MessageList accounts={accounts} messages={messages} selectedMessageKey={selectedMessageKey} loadingFlagMessageKeys={loadingFlagMessageKeys} canLoadMore={canLoadMore} loadingMore={loadingMore} onSelectMessage={onSelectMessage} onOpenMessageContextMenu={(messageKey, x, y) => setContextMenu({ messageKey, x, y })} onToggleMessageFlag={onToggleMessageFlag} onStartMessageDrag={onStartMessageDrag} onEndMessageDrag={onEndMessageDrag} onLoadMore={() => onLoadMoreFolder(selectedFolder)} />}
     </>
   )
-  const preview = <MessagePreview message={selectedMessage} loading={selectedMessageKey !== undefined && loadingMessageKey === selectedMessageKey} loadingInlineImages={selectedMessageKey !== undefined && loadingInlineImageKey === selectedMessageKey} loadingAttachmentKey={loadingAttachmentKey} loadingFlagMessageKeys={loadingFlagMessageKeys} error={messageBodyError} inlineImageError={inlineImageError} attachmentError={attachmentError} remoteImageProxyBase={remoteImageProxyBase} mobile={mobile} {...(mobile ? { onBack: onCloseMessage } : {})} onToggleMessageFlag={onToggleMessageFlag} onLoadInlineImages={onLoadInlineImages} onOpenAttachment={onOpenAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} />
+  const preview = composeDraft === undefined
+    ? <MessagePreview message={selectedMessage} loading={selectedMessageKey !== undefined && loadingMessageKey === selectedMessageKey} loadingInlineImages={selectedMessageKey !== undefined && loadingInlineImageKey === selectedMessageKey} loadingAttachmentKey={loadingAttachmentKey} loadingFlagMessageKeys={loadingFlagMessageKeys} error={messageBodyError} inlineImageError={inlineImageError} attachmentError={attachmentError} remoteImageProxyBase={remoteImageProxyBase} mobile={mobile} {...(mobile ? { onBack: onCloseMessage } : {})} onComposeFromMessage={(mode) => { if (selectedMessage !== undefined) onComposeFromMessage(selectedMessage.key, mode) }} onToggleMessageFlag={onToggleMessageFlag} onLoadInlineImages={onLoadInlineImages} onOpenAttachment={onOpenAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} />
+    : <ComposePane accounts={accounts} draft={composeDraft} sending={composeSending} error={composeError} mobile={mobile} onChange={onComposeDraftChange} onClose={onCloseCompose} onSend={onSendCompose} />
   const menu = <MessageContextMenu state={contextMenu} message={contextMenuMessage} onClose={() => setContextMenu(undefined)} onToggleMessageFlag={onToggleMessageFlag} onMarkMessageReadState={onMarkMessageReadState} onDeleteMessage={onDeleteMessage} />
-  if (mobile && selectedMessage !== undefined) return <View style={styles.mailWorkspaceMobile}>{preview}{menu}</View>
+  if (mobile && (selectedMessage !== undefined || composeDraft !== undefined)) return <View style={styles.mailWorkspaceMobile}>{preview}{menu}</View>
   return (
     <View style={[styles.mailWorkspace, mobile && styles.mailWorkspaceMobile]}>
       {mobile ? <View style={styles.threadPaneMobile}>{threadPane}</View> : <ResizablePane style={threadPaneResizeStyle} fallbackStyle={styles.threadPaneFallback}>{threadPane}</ResizablePane>}

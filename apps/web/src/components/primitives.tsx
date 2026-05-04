@@ -1,6 +1,9 @@
 import { MaterialIcons } from "@expo/vector-icons"
 import { useState, type ReactNode } from "react"
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type GestureResponderEvent, type StyleProp, type TextStyle, type ViewStyle } from "react-native"
+import { Theme } from "../theme"
+
+const C = Theme.colors
 
 export namespace Ui {
   export type MaterialIconName = keyof typeof MaterialIcons.glyphMap
@@ -27,8 +30,12 @@ export namespace Ui {
     const [pressed, setPressed] = useState(false)
     const unavailable = loading === true || disabled === true
     const action = onPress ?? onClick
-    const spinnerColor = kind === "filled" ? "#ffffff" : "#24364e"
-    const content = children ?? (label === undefined ? null : <Text style={[styles.buttonText, buttonTextStyle(kind), textStyle, unavailable && styles.buttonTextDisabled]}>{label}</Text>)
+    const spinnerColor = kind === "filled" ? C.accentContrast : C.icon
+    const hasChildren = children !== undefined && children !== null && children !== false
+    const hasLabel = label !== undefined && label.length > 0
+    const hasTrailing = trailing !== undefined && trailing !== null && trailing !== false
+    const content = hasChildren ? children : hasLabel ? <Text style={[styles.buttonText, buttonTextStyle(kind), textStyle, unavailable && styles.buttonTextDisabled]}>{label}</Text> : null
+    const iconOnly = content === null && !hasTrailing
     return (
       <Pressable
         accessibilityLabel={accessibilityLabel ?? label}
@@ -42,7 +49,7 @@ export namespace Ui {
         }}
         onPressIn={() => setPressed(true)}
         onPressOut={() => setPressed(false)}
-        style={[styles.button, buttonStyle(kind), style, !unavailable && hovered && buttonHoverStyle(kind), !unavailable && pressed && styles.buttonPressed, unavailable && styles.buttonDisabled]}
+        style={[styles.button, buttonStyle(kind), style, iconOnly && styles.buttonIconOnly, !unavailable && hovered && buttonHoverStyle(kind), !unavailable && pressed && styles.buttonPressed, unavailable && styles.buttonDisabled]}
       >
         {leading === undefined ? null : <View style={styles.buttonSlot}>{leading}</View>}
         {loading === true ? <Spinner color={spinnerColor} /> : null}
@@ -52,7 +59,7 @@ export namespace Ui {
     )
   }
 
-  export function Spinner({ color = "#24364e" }: { readonly color?: string }) {
+  export function Spinner({ color = C.icon }: { readonly color?: string }) {
     return <ActivityIndicator size="small" color={color} />
   }
 
@@ -63,21 +70,22 @@ export namespace Ui {
 
 const styles = StyleSheet.create({
   button: { alignItems: "center", borderWidth: 1, cursor: "pointer", flexDirection: "row", gap: 5, paddingHorizontal: 10, paddingVertical: 6 } as unknown as ViewStyle,
-  buttonFilled: { backgroundColor: "#0b63ce", borderColor: "#0b63ce" },
-  buttonFilledHover: { backgroundColor: "#084f9d", borderColor: "#084f9d" },
+  buttonIconOnly: { gap: 0, justifyContent: "center", paddingHorizontal: 0 } as unknown as ViewStyle,
+  buttonFilled: { backgroundColor: C.accent, borderColor: C.accent },
+  buttonFilledHover: { backgroundColor: C.accentHover, borderColor: C.accentHover },
   buttonGhost: { backgroundColor: "transparent", borderColor: "transparent" },
-  buttonGhostHover: { backgroundColor: "#e7f1ff", borderColor: "#e7f1ff" },
-  buttonHollow: { backgroundColor: "#ffffff", borderColor: "#b7c5d4" },
-  buttonHollowHover: { backgroundColor: "#eef6ff", borderColor: "#7aa7e8" },
+  buttonGhostHover: { backgroundColor: C.accentSoft, borderColor: C.accentSoft },
+  buttonHollow: { backgroundColor: C.surface, borderColor: C.borderStrong },
+  buttonHollowHover: { backgroundColor: C.accentSoft, borderColor: C.accentBorder },
   buttonPressed: { transform: [{ translateY: 1 }] },
   buttonDisabled: { cursor: "default", opacity: 0.55 } as unknown as ViewStyle,
   buttonSlot: { alignItems: "center", justifyContent: "center" },
   buttonTrailingSlot: { alignItems: "center", justifyContent: "center", marginLeft: "auto" },
   buttonText: { fontSize: 12, fontWeight: "800", lineHeight: 15, textAlign: "center" },
-  buttonTextFilled: { color: "#ffffff" },
-  buttonTextGhost: { color: "#24364e" },
-  buttonTextHollow: { color: "#24364e" },
-  buttonTextDisabled: { color: "#64748b" },
+  buttonTextFilled: { color: C.accentContrast },
+  buttonTextGhost: { color: C.icon },
+  buttonTextHollow: { color: C.icon },
+  buttonTextDisabled: { color: C.textMuted },
 })
 
 function buttonStyle(kind: Ui.ButtonKind): ViewStyle {

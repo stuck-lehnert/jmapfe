@@ -2,15 +2,18 @@ import { configuredAccountServerLabel, type ConfiguredAccount } from "@jmapfe/ap
 import { useEffect, useState, type ReactNode } from "react"
 import { ScrollView, Text, TextInput, View } from "react-native"
 import { styles } from "../../styles"
+import { Theme, type AppearanceMode } from "../../theme"
 import { Ui } from "../primitives"
 
 const { Button } = Ui
 
-export function Settings({ accounts, remoteImageProxyBase, accountSetup, onRemoteImageProxyChange, onDeleteAccount }: {
+export function Settings({ accounts, remoteImageProxyBase, appearanceMode, accountSetup, onRemoteImageProxyChange, onAppearanceModeChange, onDeleteAccount }: {
   readonly accounts: readonly ConfiguredAccount[]
   readonly remoteImageProxyBase: string | undefined
+  readonly appearanceMode: AppearanceMode
   readonly accountSetup: ReactNode
   readonly onRemoteImageProxyChange: (value: string | undefined) => void
+  readonly onAppearanceModeChange: (value: AppearanceMode) => void
   readonly onDeleteAccount: (accountId: string) => void
 }) {
   const [remoteImageProxyDraft, setRemoteImageProxyDraft] = useState(remoteImageProxyBase ?? "")
@@ -42,11 +45,18 @@ export function Settings({ accounts, remoteImageProxyBase, accountSetup, onRemot
           ))}
         </View>
         <View style={styles.settingsCard}>
+          <Text style={styles.cardTitle}>Appearance</Text>
+          <Text style={styles.flowCopy}>System follows `prefers-color-scheme`. Light and dark override it locally.</Text>
+          <View style={styles.themeModeRow}>
+            {Theme.APPEARANCE_MODES.map((mode) => <Button key={mode} kind={appearanceMode === mode ? "filled" : "hollow"} label={appearanceModeLabel(mode)} onPress={() => onAppearanceModeChange(mode)} style={styles.themeModeButton} />)}
+          </View>
+        </View>
+        <View style={styles.settingsCard}>
           <Text style={styles.cardTitle}>Remote Content Proxy</Text>
           <Text style={styles.flowCopy}>Leave blank to load remote images directly only after you press Load. Add an HTTPS proxy endpoint to enable extra proxy load option. Use {"{url}"} as placeholder, or accept url query parameter.</Text>
           <View style={styles.field}>
             <Text style={styles.fieldLabel}>Proxy URL</Text>
-            <TextInput value={remoteImageProxyDraft} placeholder="https://proxy.example/image?url={url}" placeholderTextColor="#718096" onChangeText={setRemoteImageProxyDraft} autoCapitalize="none" style={styles.input} />
+            <TextInput value={remoteImageProxyDraft} placeholder="https://proxy.example/image?url={url}" placeholderTextColor={Theme.colors.placeholder} onChangeText={setRemoteImageProxyDraft} autoCapitalize="none" style={styles.input} />
           </View>
           <View style={styles.flowButtons}>
             <Button kind="hollow" label="Clear" disabled={remoteImageProxyDraft.trim().length === 0 && remoteImageProxyBase === undefined} onPress={clearRemoteImageProxy} />
@@ -56,6 +66,12 @@ export function Settings({ accounts, remoteImageProxyBase, accountSetup, onRemot
       </View>
     </ScrollView>
   )
+}
+
+function appearanceModeLabel(mode: AppearanceMode): string {
+  if (mode === "system") return "System"
+  if (mode === "dark") return "Dark"
+  return "Light"
 }
 
 function AccountSummary({ account }: { readonly account: ConfiguredAccount }) {

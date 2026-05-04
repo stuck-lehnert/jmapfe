@@ -5,6 +5,7 @@ export namespace MailModel {
   export type RemoteContentMode = "blocked" | "direct" | "proxy"
   export type SearchStatus = "idle" | "searching" | "ready" | "error"
   export type MessageFlagState = "unflagged" | "flagged" | "done"
+  export type ComposeMode = "new" | "reply" | "reply-all" | "forward"
 
   export interface FolderNode {
     readonly id: string
@@ -55,6 +56,10 @@ export namespace MailModel {
     readonly flagState: MessageFlagState
     readonly from: string
     readonly to: readonly string[]
+    readonly cc?: readonly string[]
+    readonly replyTo?: readonly string[]
+    readonly messageId?: readonly string[]
+    readonly references?: readonly string[]
     readonly receivedAt?: string
     readonly sentAt?: string
     readonly bodyText?: string
@@ -91,6 +96,20 @@ export namespace MailModel {
     readonly messages: readonly MailMessage[]
     readonly syncedAt?: string
     readonly error?: string
+  }
+
+  export interface ComposeDraft {
+    readonly accountId: string
+    readonly jmapAccountId?: string
+    readonly mode: ComposeMode
+    readonly to: string
+    readonly cc: string
+    readonly bcc: string
+    readonly subject: string
+    readonly body: string
+    readonly sourceMessageKey?: string
+    readonly sourceMessageId?: string
+    readonly sourceReferences?: readonly string[]
   }
 
   export interface FolderLoadTarget {
@@ -161,6 +180,10 @@ export namespace MailModel {
     "keywords",
     "from",
     "to",
+    "cc",
+    "replyTo",
+    "messageId",
+    "references",
     "hasAttachment",
     "attachments",
   ] as const

@@ -3,17 +3,20 @@ import { Platform, ScrollView, Text, View } from "react-native"
 import { EmailHtml, MailModel } from "../../backend"
 import { htmlPreviewFrameStyle } from "../../layoutConstants"
 import { styles } from "../../styles"
+import { Theme } from "../../theme"
 import { Ui } from "../primitives"
 import { FlagButton } from "./FlagButton"
 import { MailUi } from "./mailUi"
 
 type EmailAttachmentPart = MailModel.EmailAttachmentPart
+type ComposeMode = MailModel.ComposeMode
 type MailMessage = MailModel.MailMessage
 type RemoteContentMode = MailModel.RemoteContentMode
 
 const { Button, MaterialActionIcon, Spinner } = Ui
+const C = Theme.colors
 
-export function MessagePreview({ message, loading, loadingInlineImages, loadingAttachmentKey, loadingFlagMessageKeys, error, inlineImageError, attachmentError, remoteImageProxyBase, mobile, onBack, onToggleMessageFlag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments }: {
+export function MessagePreview({ message, loading, loadingInlineImages, loadingAttachmentKey, loadingFlagMessageKeys, error, inlineImageError, attachmentError, remoteImageProxyBase, mobile, onBack, onComposeFromMessage, onToggleMessageFlag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments }: {
   readonly message: MailMessage | undefined
   readonly loading: boolean
   readonly loadingInlineImages: boolean
@@ -25,6 +28,7 @@ export function MessagePreview({ message, loading, loadingInlineImages, loadingA
   readonly remoteImageProxyBase: string | undefined
   readonly mobile?: boolean
   readonly onBack?: () => void
+  readonly onComposeFromMessage: (mode: Exclude<ComposeMode, "new">) => void
   readonly onToggleMessageFlag: (key: string) => void
   readonly onLoadInlineImages: (key: string) => void
   readonly onOpenAttachment: (messageKey: string, attachment: EmailAttachmentPart, index: number) => void
@@ -50,13 +54,18 @@ export function MessagePreview({ message, loading, loadingInlineImages, loadingA
     <>
       <ScrollView style={[styles.readerPane, mobile === true && styles.readerPaneMobile]} contentContainerStyle={styles.readerContent}>
         <View style={[styles.readerTitleRow, mobile === true && styles.readerTitleRowMobile]}>
-          {onBack === undefined ? null : <Button kind="hollow" leading={<MaterialActionIcon name="arrow-back" size={18} color="#24364e" />} accessibilityLabel="Back to message list" onPress={onBack} style={styles.toolbarIconControl} />}
+          {onBack === undefined ? null : <Button kind="hollow" leading={<MaterialActionIcon name="arrow-back" size={18} color={C.icon} />} accessibilityLabel="Back to message list" onPress={onBack} style={styles.toolbarIconControl} />}
           <Text style={[styles.readerTitle, mobile === true && styles.readerTitleMobile]}>{message.subject || "(no subject)"}</Text>
           <FlagButton flagState={message.flagState} loading={loadingFlagMessageKeys[message.key] === true} onPress={() => onToggleMessageFlag(message.key)} />
         </View>
         <Text style={styles.readerMeta}>From {message.from || "Unknown sender"}</Text>
         <Text style={styles.readerMeta}>To {message.to.length === 0 ? "Undisclosed recipients" : message.to.join(", ")}</Text>
         <Text style={styles.readerMeta}>{MailUi.formatMessageDate(message.receivedAt ?? message.sentAt)}</Text>
+        <View style={styles.readerActionRow}>
+          <Button kind="filled" leading={<MaterialActionIcon name="reply" size={14} color={C.accentContrast} />} label="Reply" onPress={() => onComposeFromMessage("reply")} style={styles.readerActionButton} textStyle={styles.compactButtonText} />
+          <Button kind="hollow" leading={<MaterialActionIcon name="reply-all" size={14} color={C.icon} />} label="Reply all" onPress={() => onComposeFromMessage("reply-all")} style={styles.readerActionButton} textStyle={styles.compactButtonText} />
+          <Button kind="hollow" leading={<MaterialActionIcon name="forward" size={14} color={C.icon} />} label="Forward" onPress={() => onComposeFromMessage("forward")} style={styles.readerActionButton} textStyle={styles.compactButtonText} />
+        </View>
         <AttachmentList messageKey={message.key} attachments={attachments} loadingAttachmentKey={loadingAttachmentKey} onOpenAttachment={onOpenAttachment} onDownloadAttachment={onDownloadAttachment} onDownloadAllAttachments={onDownloadAllAttachments} />
         {attachmentError === undefined ? null : <Text style={styles.errorText}>{attachmentError}</Text>}
         {loading && message.bodyLoaded !== true ? (
@@ -105,7 +114,7 @@ function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onOpenA
     <View style={styles.attachmentList}>
       <View style={styles.attachmentListHeader}>
         <Text style={styles.attachmentListTitle}>{attachments.length} Attachment{attachments.length === 1 ? "" : "s"}</Text>
-        {attachments.length > 1 ? <Button kind="hollow" leading={<MaterialActionIcon name="archive" size={11} color="#24364e" />} label="Download zip" loading={loadingAttachmentKey === allActionKey} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAllAttachments(messageKey)} style={styles.compactButton} textStyle={styles.compactButtonText} /> : null}
+        {attachments.length > 1 ? <Button kind="hollow" leading={<MaterialActionIcon name="archive" size={11} color={C.icon} />} label="Download zip" loading={loadingAttachmentKey === allActionKey} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAllAttachments(messageKey)} style={styles.compactButton} textStyle={styles.compactButtonText} /> : null}
       </View>
       <View style={styles.attachmentGrid}>
         {attachments.map((attachment, index) => {
@@ -119,7 +128,7 @@ function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onOpenA
               </View>
               <View style={styles.attachmentActions}>
                 {loading ? <Spinner /> : null}
-                <Button kind="hollow" leading={<MaterialActionIcon name="file-download" size={17} color="#24364e" />} accessibilityLabel={`Download ${attachment.name}`} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAttachment(messageKey, attachment, index)} stopPropagation style={styles.squareIconButton} />
+                <Button kind="hollow" leading={<MaterialActionIcon name="file-download" size={17} color={C.icon} />} accessibilityLabel={`Download ${attachment.name}`} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAttachment(messageKey, attachment, index)} stopPropagation style={styles.squareIconButton} />
               </View>
             </Button>
           )

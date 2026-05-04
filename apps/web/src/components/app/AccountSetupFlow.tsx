@@ -22,9 +22,11 @@ import {
 import { useState } from "react"
 import { Text, TextInput, View } from "react-native"
 import { styles } from "../../styles"
+import { Theme } from "../../theme"
 import { Ui } from "../primitives"
 
 const { Button } = Ui
+const C = Theme.colors
 
 type SetupStep = "identity" | "server" | "auth" | "review"
 type ServerStatus = "idle" | "checking" | "srv" | "fallback" | "error"
@@ -270,7 +272,7 @@ function Field({ label, value, placeholder, secure, onChangeText }: {
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput value={value} placeholder={placeholder} placeholderTextColor="#718096" secureTextEntry={secure} onChangeText={onChangeText} autoCapitalize="none" style={styles.input} />
+      <TextInput value={value} placeholder={placeholder} placeholderTextColor={C.placeholder} secureTextEntry={secure} onChangeText={onChangeText} autoCapitalize="none" style={styles.input} />
     </View>
   )
 }

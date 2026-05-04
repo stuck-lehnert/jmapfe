@@ -1,4 +1,7 @@
 import type { CSSProperties } from "react"
+import { Theme } from "./theme"
+
+const C = Theme.colors
 
 export const DEFAULT_FOLDER_PANE_WIDTH = 168
 export const MIN_FOLDER_PANE_WIDTH = 120
@@ -8,7 +11,7 @@ export const DIVIDER_WIDTH = 7
 export const MOBILE_BREAKPOINT = 760
 
 export const folderPaneResizeStyle: CSSProperties = {
-  backgroundColor: "#eef3f9",
+  backgroundColor: C.surfaceInset,
   boxSizing: "border-box",
   display: "flex",
   flex: "0 0 auto",
@@ -21,7 +24,7 @@ export const folderPaneResizeStyle: CSSProperties = {
 }
 
 export const threadPaneResizeStyle: CSSProperties = {
-  backgroundColor: "#ffffff",
+  backgroundColor: C.surface,
   boxSizing: "border-box",
   display: "flex",
   flex: "0 0 auto",
@@ -34,7 +37,7 @@ export const threadPaneResizeStyle: CSSProperties = {
 }
 
 export const paneDividerStyle: CSSProperties = {
-  backgroundColor: "#c8d3df",
+  backgroundColor: C.divider,
   cursor: "col-resize",
   flex: `0 0 ${DIVIDER_WIDTH}px`,
   height: "100%",

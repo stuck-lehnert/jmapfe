@@ -1,6 +1,7 @@
 import type { ConfiguredAccount } from "@jmapfe/app-core"
 import {
   CAP_MAIL,
+  CAP_SUBMISSION,
   FetchJmapTransport,
   JmapClient,
   JmapTransportError,
@@ -23,6 +24,7 @@ import { MailState } from "./mailState"
 import { RuntimeBackend } from "./runtime"
 
 type AccountMailState = MailModel.AccountMailState
+type ComposeDraft = MailModel.ComposeDraft
 type EmailAttachmentPart = MailModel.EmailAttachmentPart
 type EmailQueryResult = MailModel.EmailQueryResult
 type FolderLoadTarget = MailModel.FolderLoadTarget
@@ -47,6 +49,12 @@ export namespace JmapMail {
     readonly session: JmapSession
     readonly transport: FetchJmapTransport
     readonly primaryMailAccountId: string
+  }
+
+  interface SendIdentity {
+    readonly id: string
+    readonly name?: string
+    readonly email: string
   }
 
   export async function fetchAccountMail(account: ConfiguredAccount, auth: AuthProvider): Promise<AccountMailState> {
@@ -103,6 +111,66 @@ export namespace JmapMail {
         transport,
       }),
     }
+  }
+
+  export async function sendComposeDraft(account: ConfiguredAccount, auth: AuthProvider, draft: ComposeDraft): Promise<void> {
+    const { client, session, primaryMailAccountId } = await createMailClient(account, auth)
+    const mailAccountId = draft.jmapAccountId ?? primaryMailAccountId
+    if (session.capabilities[CAP_SUBMISSION] === undefined || session.accounts[mailAccountId]?.accountCapabilities[CAP_SUBMISSION] === undefined) {
+      throw new Error("Server does not advertise JMAP submission for this account.")
+    }
+
+    const [identity, mailboxes] = await Promise.all([
+      fetchSendIdentity(client, mailAccountId, account.email),
+      fetchServerMailboxes(client, mailAccountId),
+    ])
+    const draftsMailboxId = mailboxServerIdByRole(mailboxes, "drafts")
+    const sentMailboxId = mailboxServerIdByRole(mailboxes, "sent")
+    if (draftsMailboxId === undefined) throw new Error("Server did not advertise a Drafts mailbox.")
+
+    const recipients = {
+      to: parseComposeAddressList(draft.to, "To"),
+      cc: parseComposeAddressList(draft.cc, "Cc"),
+      bcc: parseComposeAddressList(draft.bcc, "Bcc"),
+    }
+    if (recipients.to.length + recipients.cc.length + recipients.bcc.length === 0) throw new Error("Add at least one recipient before sending.")
+
+    const emailCreateId = "draft"
+    const submissionCreateId = "submission"
+    const emailSetCallId = "ui-compose-email-set"
+    const submissionSetCallId = "ui-compose-submission-set"
+    const response = await client.request({
+      using: [CAP_MAIL, CAP_SUBMISSION],
+      calls: [
+        methodCall("Email/set", {
+          accountId: mailAccountId,
+          create: {
+            [emailCreateId]: composeEmailCreateObject(account, identity, draft, draftsMailboxId, recipients),
+          },
+        }, emailSetCallId),
+        methodCall("EmailSubmission/set", {
+          accountId: mailAccountId,
+          create: {
+            [submissionCreateId]: {
+              emailId: `#${emailCreateId}`,
+              identityId: identity.id,
+            },
+          },
+          onSuccessUpdateEmail: {
+            [submissionCreateId]: sentMailboxId === undefined ? {
+              "keywords/$draft": null,
+            } : {
+              "keywords/$draft": null,
+              [`mailboxIds/${jmapPatchPathSegment(draftsMailboxId)}`]: null,
+              [`mailboxIds/${jmapPatchPathSegment(sentMailboxId)}`]: true,
+            },
+          },
+        }, submissionSetCallId),
+      ],
+    })
+
+    throwIfSetCreateRejected(responseArgsByCallId(response, emailSetCallId), emailCreateId, "Server rejected draft creation.")
+    throwIfSetCreateRejected(responseArgsByCallId(response, submissionSetCallId), submissionCreateId, "Server rejected email submission.")
   }
 
   export async function fetchEmailMessageBody(client: JmapClient, mailAccountId: string, emailId: string): Promise<MessageBody> {
@@ -189,6 +257,105 @@ export namespace JmapMail {
   export function connectivityErrorMessage(error: unknown): string {
     if (error instanceof TypeError) return "Could not reach the server. If browser setup keeps failing, try the desktop app."
     return error instanceof Error ? error.message : "Connectivity check failed."
+  }
+
+  async function fetchSendIdentity(client: JmapClient, accountId: string, accountEmail: string): Promise<SendIdentity> {
+    const args = responseArgs(await client.call([CAP_SUBMISSION], "Identity/get", {
+      accountId,
+      ids: null,
+      properties: ["id", "name", "email"],
+    }, "ui-compose-identity-get"))
+    const identities = jsonObjectArray(args.list).flatMap(toSendIdentity)
+    const preferredEmail = accountEmail.trim().toLowerCase()
+    const identity = identities.find((item) => item.email.trim().toLowerCase() === preferredEmail) ?? identities[0]
+    if (identity === undefined) throw new Error("Server did not advertise a send identity.")
+    return identity
+  }
+
+  function toSendIdentity(input: JsonObject): SendIdentity[] {
+    const id = stringValue(input.id)
+    const email = stringValue(input.email)
+    if (id === undefined || email === undefined) return []
+    const name = stringValue(input.name)
+    return [{ id, email, ...(name === undefined ? {} : { name }) }]
+  }
+
+  async function fetchServerMailboxes(client: JmapClient, accountId: string): Promise<JsonObject[]> {
+    const args = responseArgs(await client.call([CAP_MAIL], "Mailbox/get", { accountId, ids: null, properties: ["id", "name", "role"] }, "ui-compose-mailbox-get"))
+    return jsonObjectArray(args.list)
+  }
+
+  function mailboxServerIdByRole(mailboxes: readonly JsonObject[], role: string): string | undefined {
+    const byRole = mailboxes.find((mailbox) => stringValue(mailbox.role) === role)
+    if (byRole !== undefined) return stringValue(byRole.id)
+    const byName = mailboxes.find((mailbox) => stringValue(mailbox.name)?.toLowerCase() === role)
+    return byName === undefined ? undefined : stringValue(byName.id)
+  }
+
+  function composeEmailCreateObject(account: ConfiguredAccount, identity: SendIdentity, draft: ComposeDraft, draftsMailboxId: string, recipients: { readonly to: readonly JsonObject[]; readonly cc: readonly JsonObject[]; readonly bcc: readonly JsonObject[] }): JsonObject {
+    return cleanUndefined({
+      mailboxIds: { [draftsMailboxId]: true },
+      keywords: { "$draft": true },
+      from: [composeAddress(identity.name ?? account.displayName, identity.email)],
+      to: [...recipients.to],
+      cc: recipients.cc.length === 0 ? undefined : [...recipients.cc],
+      bcc: recipients.bcc.length === 0 ? undefined : [...recipients.bcc],
+      subject: draft.subject.trim(),
+      textBody: [{ partId: "body", type: "text/plain", charset: "utf-8" }],
+      bodyValues: { body: { value: draft.body } },
+      ...composeThreadHeaders(draft),
+    })
+  }
+
+  function composeThreadHeaders(draft: ComposeDraft): JsonObject {
+    if ((draft.mode !== "reply" && draft.mode !== "reply-all") || draft.sourceMessageId === undefined) return {}
+    return {
+      inReplyTo: [draft.sourceMessageId],
+      references: unique([...(draft.sourceReferences ?? []), draft.sourceMessageId]),
+    }
+  }
+
+  function parseComposeAddressList(value: string, field: string): JsonObject[] {
+    return value
+      .split(/[\n;,]/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .map((part) => parseComposeAddress(part, field))
+  }
+
+  function parseComposeAddress(value: string, field: string): JsonObject {
+    const angle = /^(.*?)<([^<>]+)>$/.exec(value)
+    const email = (angle?.[2] ?? value).trim().replace(/^mailto:/i, "")
+    const name = angle === null ? "" : unquoteDisplayName(angle[1] ?? "")
+    if (!isLikelyEmail(email)) throw new Error(`${field} contains invalid email address: ${value}`)
+    return composeAddress(name, email)
+  }
+
+  function composeAddress(name: string, email: string): JsonObject {
+    return { name: name.trim(), email: email.trim() }
+  }
+
+  function unquoteDisplayName(value: string): string {
+    const trimmed = value.trim()
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1).trim()
+    return trimmed
+  }
+
+  function throwIfSetCreateRejected(args: JsonObject, createId: string, fallback: string): void {
+    const created = keywordRecord(args.created)
+    const rejected = keywordRecord(args.notCreated)[createId]
+    if (rejected !== undefined) throw new Error(jmapSetErrorMessage(rejected, fallback))
+    if (created[createId] === undefined) throw new Error(fallback)
+  }
+
+  function jmapSetErrorMessage(error: unknown, fallback: string): string {
+    if (typeof error !== "object" || error === null || Array.isArray(error)) return fallback
+    const detail = error as Record<string, unknown>
+    const type = typeof detail.type === "string" ? detail.type : undefined
+    const description = typeof detail.description === "string" ? detail.description : undefined
+    if (description !== undefined) return `${fallback} ${description}`
+    if (type !== undefined) return `${fallback} ${type}`
+    return fallback
   }
 
   async function fetchEmailMessages(client: JmapClient, account: ConfiguredAccount, mailAccountId: string, emailIds: readonly string[]): Promise<MailMessage[]> {
@@ -331,6 +498,8 @@ export namespace JmapMail {
   function toMailMessageMetadata(account: ConfiguredAccount, jmapAccountId: string, email: JsonObject): MailMessage {
     const id = stringValue(email.id) ?? `${account.id}:unknown`
     const to = addressList(email.to)
+    const cc = addressList(email.cc)
+    const replyTo = addressList(email.replyTo)
     const attachments = emailAttachmentParts(email)
     const keywords = keywordRecord(email.keywords)
     return {
@@ -345,6 +514,10 @@ export namespace JmapMail {
       flagState: messageFlagState(keywords),
       from: addressList(email.from)[0] ?? "",
       to,
+      cc,
+      replyTo,
+      messageId: stringArray(email.messageId),
+      references: stringArray(email.references),
       ...(stringValue(email.receivedAt) === undefined ? {} : { receivedAt: stringValue(email.receivedAt) as string }),
       ...(stringValue(email.sentAt) === undefined ? {} : { sentAt: stringValue(email.sentAt) as string }),
       attachments,

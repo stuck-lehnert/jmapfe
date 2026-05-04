@@ -1,6 +1,7 @@
 import { parseConfiguredAccounts, serializeConfiguredAccounts, type ConfiguredAccount } from "@jmapfe/app-core"
 import { MailModel } from "./mailModel"
 import { MailState } from "./mailState"
+import { Theme, type AppearanceMode } from "../theme"
 
 type AccountMailState = MailModel.AccountMailState
 type EmailAttachmentPart = MailModel.EmailAttachmentPart
@@ -12,6 +13,7 @@ type MessageFlagState = MailModel.MessageFlagState
 const ACCOUNTS_STORAGE_KEY = "jmapfe.accounts.v1"
 const MAIL_CACHE_STORAGE_KEY = "jmapfe.mail-cache.v1"
 const REMOTE_IMAGE_PROXY_STORAGE_KEY = "jmapfe.remote-image-proxy.v1"
+const APPEARANCE_MODE_STORAGE_KEY = "jmapfe.appearance-mode.v1"
 
 export namespace AppStorage {
   export function loadAccounts(): ConfiguredAccount[] {
@@ -82,6 +84,27 @@ export namespace AppStorage {
         globalThis.localStorage?.removeItem(REMOTE_IMAGE_PROXY_STORAGE_KEY)
       } else {
         globalThis.localStorage?.setItem(REMOTE_IMAGE_PROXY_STORAGE_KEY, value)
+      }
+    } catch {
+      // Settings storage moves to app store with rest of local config later.
+    }
+  }
+
+  export function loadAppearanceMode(): AppearanceMode {
+    try {
+      const value = globalThis.localStorage?.getItem(APPEARANCE_MODE_STORAGE_KEY)
+      return Theme.isAppearanceMode(value) ? value : "system"
+    } catch {
+      return "system"
+    }
+  }
+
+  export function saveAppearanceMode(value: AppearanceMode): void {
+    try {
+      if (value === "system") {
+        globalThis.localStorage?.removeItem(APPEARANCE_MODE_STORAGE_KEY)
+      } else {
+        globalThis.localStorage?.setItem(APPEARANCE_MODE_STORAGE_KEY, value)
       }
     } catch {
       // Settings storage moves to app store with rest of local config later.

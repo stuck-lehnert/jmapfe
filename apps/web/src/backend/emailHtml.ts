@@ -1,4 +1,5 @@
 import type { MailModel } from "./mailModel"
+import { Theme } from "../theme"
 
 export namespace EmailHtml {
   export interface Preview {
@@ -129,7 +130,7 @@ export namespace EmailHtml {
     const proxyOrigin = remoteContentMode === "proxy" && proxyBase !== undefined ? safeOrigin(proxyBase) : undefined
     const imageSrc = remoteContentMode === "direct" ? "data: blob: https: http:" : proxyOrigin === undefined ? "data: blob:" : `data: blob: ${proxyOrigin}`
     const csp = `default-src 'none'; img-src ${imageSrc}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'`
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}"><style>html,body{max-height:none;overflow-y:visible}body{box-sizing:border-box;color:#172033;font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;max-width:100%;overflow-x:auto;padding:0}img{height:auto;max-width:100%}table{max-width:100%;border-collapse:collapse}a{color:#0b4f9c;text-decoration:none}</style></head><body>${bodyHtml}</body></html>`
+    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}"><style>${Theme.emailPreviewCss()}html,body{max-height:none;overflow-y:visible}body{background:var(--jf-reader-bg);box-sizing:border-box;color:var(--jf-text-strong);font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;max-width:100%;overflow-x:auto;padding:0}img{height:auto;max-width:100%}table{max-width:100%;border-collapse:collapse}a{color:var(--jf-accent-active);text-decoration:none}</style></head><body>${bodyHtml}</body></html>`
   }
 
   function proxiedRemoteUrl(remoteUrl: string, proxyBase: string): string {

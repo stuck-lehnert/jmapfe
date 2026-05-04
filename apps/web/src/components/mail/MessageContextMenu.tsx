@@ -3,6 +3,7 @@ import { Platform, Pressable, View, useWindowDimensions } from "react-native"
 import { MailModel } from "../../backend"
 import { contextMenuBackdropWebStyle } from "../../layoutConstants"
 import { styles } from "../../styles"
+import { Theme } from "../../theme"
 import { Ui } from "../primitives"
 import { MailUi } from "./mailUi"
 
@@ -11,6 +12,7 @@ type MessageContextMenuState = MailModel.MessageContextMenuState
 type MaterialIconName = Ui.MaterialIconName
 
 const { Button, MaterialActionIcon } = Ui
+const C = Theme.colors
 
 export function MessageContextMenu({ state, message, onClose, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage }: {
   readonly state: MessageContextMenuState | undefined
@@ -51,7 +53,7 @@ function ContextMenuBackdrop({ onClose }: { readonly onClose: () => void }) {
 }
 
 function ContextMenuItem({ icon, label, destructive, onPress }: { readonly icon: MaterialIconName; readonly label: string; readonly destructive?: boolean; readonly onPress: () => void }) {
-  const color = destructive === true ? "#b91c1c" : "#172033"
+  const color = destructive === true ? C.dangerText : C.textStrong
   return <Button kind="ghost" leading={<MaterialActionIcon name={icon} size={16} color={color} />} label={label} onPress={onPress} stopPropagation style={styles.contextMenuItem} textStyle={[styles.contextMenuText, destructive === true && styles.contextMenuTextDestructive]} />
 }
 

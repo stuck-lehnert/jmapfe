@@ -6,12 +6,15 @@ import { AppStorage, AttachmentBackend, Binary, JmapMail, MailModel, MailState, 
 import { AccountSetupFlow, MailUi, UIShell } from "./components"
 import { MOBILE_BREAKPOINT } from "./layoutConstants"
 import { styles } from "./styles"
+import { Theme, type AppearanceMode } from "./theme"
 
 const EMAIL_PAGE_SIZE = MailModel.EMAIL_PAGE_SIZE
 type AppView = "mail" | "settings"
 type MailMessage = MailModel.MailMessage
 type EmailAttachmentPart = MailModel.EmailAttachmentPart
 type AccountMailState = MailModel.AccountMailState
+type ComposeDraft = MailModel.ComposeDraft
+type ComposeMode = MailModel.ComposeMode
 type LoadedMessageBatch = MailModel.LoadedMessageBatch
 type LoadedMailTargetBatch = MailModel.LoadedMailTargetBatch
 type SearchState = MailModel.SearchState
@@ -45,6 +48,12 @@ interface SearchUiState {
   readonly state: SearchState
 }
 
+interface ComposeUiState {
+  readonly draft: ComposeDraft | undefined
+  readonly sending: boolean
+  readonly error: string | undefined
+}
+
 interface VaultUiState {
   readonly mode: VaultMode
   readonly masterPassword: string
@@ -64,12 +73,15 @@ export default function App() {
   const loadingFlagMessageKeysRef = useRef<Record<string, true>>({})
   const [mailErrors, setMailErrors] = useState<MailErrorState>({ messageBody: {}, inlineImage: {}, attachment: {} })
   const [search, setSearch] = useState<SearchUiState>({ draft: "", state: EMPTY_SEARCH_STATE })
+  const [compose, setCompose] = useState<ComposeUiState>({ draft: undefined, sending: false, error: undefined })
   const [remoteImageProxyBase, setRemoteImageProxyBase] = useState<string | undefined>(() => AppStorage.loadRemoteImageProxyBase())
+  const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => AppStorage.loadAppearanceMode())
   const [vault, setVault] = useState<VaultUiState>({ mode: "checking", masterPassword: "", error: undefined })
   const [notice, setNotice] = useState<string | undefined>()
 
   useEffect(() => AppStorage.saveAccounts(accounts), [accounts])
   useEffect(() => AppStorage.saveMailCache(mailByAccount), [mailByAccount])
+  useEffect(() => Theme.applyAppearanceMode(appearanceMode), [appearanceMode])
   useEffect(() => {
     setMailByAccount((current) => AppStorage.pruneMailCache(current, accounts))
   }, [accounts])
@@ -490,6 +502,83 @@ export default function App() {
     setSearch({ draft: "", state: EMPTY_SEARCH_STATE })
   }
 
+  const openNewCompose = () => {
+    const account = accounts[0]
+    if (account === undefined) return
+    setNavigation((current) => ({ ...current, view: "mail", folderDrawerOpen: false }))
+    setCompose({ draft: emptyComposeDraft(account), sending: false, error: undefined })
+  }
+
+  const openMessageCompose = async (messageKey: string, mode: Exclude<ComposeMode, "new">): Promise<void> => {
+    const message = MailUi.findMessageByKey(mailByAccount, messageKey)
+    if (message === undefined) return
+    setNavigation((current) => ({ ...current, view: "mail", folderDrawerOpen: false }))
+    const loadedMessage = await loadMessageForCompose(message)
+    if (loadedMessage === undefined) return
+    setCompose({ draft: MailUi.composeDraftForMessage(accounts, loadedMessage, mode), sending: false, error: undefined })
+  }
+
+  const loadMessageForCompose = async (message: MailMessage): Promise<MailMessage | undefined> => {
+    if (message.bodyLoaded === true) return message
+    const account = accounts.find((item) => item.id === message.accountId)
+    const auth = accountAuth[message.accountId]
+    if (account === undefined || auth === undefined) {
+      setNotice("Sign in again to fetch message contents before composing.")
+      return undefined
+    }
+
+    setLoading((current) => ({ ...current, messageKey: message.key }))
+    setMailErrors((current) => ({ ...current, messageBody: omitKey(current.messageBody, message.key) }))
+    try {
+      const { client, primaryMailAccountId } = await JmapMail.createMailClient(account, auth)
+      const body = await JmapMail.fetchEmailMessageBody(client, message.jmapAccountId ?? primaryMailAccountId, message.id)
+      setMailByAccount((current) => MailState.mergeMessageBody(current, message.accountId, message.key, body))
+      return {
+        ...message,
+        bodyText: body.bodyText,
+        ...(body.bodyHtml === undefined ? {} : { bodyHtml: body.bodyHtml }),
+        inlineImages: body.inlineImages,
+        attachments: body.attachments,
+        bodyLoaded: true,
+      }
+    } catch (error) {
+      setMailErrors((current) => ({ ...current, messageBody: { ...current.messageBody, [message.key]: JmapMail.connectivityErrorMessage(error) } }))
+      return undefined
+    } finally {
+      setLoading((current) => ({ ...current, messageKey: current.messageKey === message.key ? undefined : current.messageKey }))
+    }
+  }
+
+  const updateComposeDraft = (updates: Partial<ComposeDraft>) => {
+    setCompose((current) => current.draft === undefined ? current : { ...current, draft: mergeComposeDraft(current.draft, updates), error: undefined })
+  }
+
+  const closeCompose = () => {
+    if (compose.sending) return
+    setCompose({ draft: undefined, sending: false, error: undefined })
+  }
+
+  const sendCompose = async (): Promise<void> => {
+    const draft = compose.draft
+    if (draft === undefined || compose.sending) return
+    const account = accounts.find((item) => item.id === draft.accountId)
+    const auth = accountAuth[draft.accountId]
+    if (account === undefined || auth === undefined) {
+      setCompose((current) => ({ ...current, error: "Sign in again to send mail." }))
+      return
+    }
+
+    setCompose((current) => ({ ...current, sending: true, error: undefined }))
+    try {
+      await JmapMail.sendComposeDraft(account, auth, draft)
+      setCompose({ draft: undefined, sending: false, error: undefined })
+      showNotice("Message sent.", 8_000)
+      void syncAccountMail(account, auth)
+    } catch (error) {
+      setCompose((current) => ({ ...current, sending: false, error: JmapMail.connectivityErrorMessage(error) }))
+    }
+  }
+
   const unlockFallbackVault = async () => {
     setVault((current) => ({ ...current, error: undefined }))
     try {
@@ -545,6 +634,12 @@ export default function App() {
     setNotice(normalizedValue === undefined ? "Remote content proxy cleared." : "Remote content proxy saved.")
   }
 
+  const updateAppearanceMode = (value: AppearanceMode) => {
+    AppStorage.saveAppearanceMode(value)
+    setAppearanceMode(value)
+    setNotice(`Appearance set to ${value}.`)
+  }
+
   const selectFolder = (folderId: string) => {
     setNavigation((current) => ({ ...current, selectedFolder: folderId, selectedMessageKey: undefined, view: "mail", folderDrawerOpen: isMobile ? false : current.folderDrawerOpen }))
     setSearch({ draft: "", state: EMPTY_SEARCH_STATE })
@@ -575,20 +670,30 @@ export default function App() {
       searchDraft={search.draft}
       searchState={search.state}
       remoteImageProxyBase={remoteImageProxyBase}
+      appearanceMode={appearanceMode}
+      composeDraft={compose.draft}
+      composeSending={compose.sending}
+      composeError={compose.error}
       settingsAccountSetup={<AccountSetupFlow mode="settings" fetchImpl={RuntimeBackend.jmapFetch} onAccountVerified={addSettingsAccount} />}
       vaultUnlock={vault.mode === "locked" ? { masterPassword: vault.masterPassword, error: vault.error, onChange: (masterPassword) => setVault((current) => ({ ...current, masterPassword })), onUnlock: () => { void unlockFallbackVault() } } : undefined}
       onOpenFolders={() => setNavigation((current) => ({ ...current, folderDrawerOpen: true }))}
       onOpenMail={() => setNavigation((current) => ({ ...current, view: "mail" }))}
+      onWrite={openNewCompose}
       onGetMessages={syncAllMail}
       onOpenSettings={() => setNavigation((current) => ({ ...current, view: "settings" }))}
       onSelectFolder={selectFolder}
       onDropMessageToFolder={(messageKey, folderId) => { setNavigation((current) => ({ ...current, draggedMessageKey: undefined })); void moveMessageToFolder(messageKey, folderId) }}
       onCloseFolderDrawer={() => setNavigation((current) => ({ ...current, folderDrawerOpen: false }))}
       onRemoteImageProxyChange={updateRemoteImageProxyBase}
+      onAppearanceModeChange={updateAppearanceMode}
       onDeleteAccount={deleteAccount}
       onSearchDraftChange={(draft) => setSearch((current) => ({ ...current, draft }))}
       onSearch={() => { void runSearch(search.draft) }}
       onClearSearch={clearSearch}
+      onComposeDraftChange={updateComposeDraft}
+      onCloseCompose={closeCompose}
+      onSendCompose={() => { void sendCompose() }}
+      onComposeFromMessage={(messageKey, mode) => { void openMessageCompose(messageKey, mode) }}
       onSelectMessage={selectMessage}
       onCloseMessage={() => setNavigation((current) => ({ ...current, selectedMessageKey: undefined }))}
       onToggleMessageFlag={(messageKey) => { void toggleMessageFlag(messageKey) }}
@@ -611,6 +716,32 @@ function FirstRunSetup({ onAccountVerified }: { readonly onAccountVerified: (acc
   const content = <AccountSetupFlow mode="first-run" fetchImpl={RuntimeBackend.jmapFetch} onAccountVerified={onAccountVerified} />
   if (mobile) return <ScrollView style={styles.firstRunScroll} contentContainerStyle={[styles.firstRunShell, styles.firstRunShellMobile]}>{content}</ScrollView>
   return <View style={styles.firstRunShell}>{content}</View>
+}
+
+function emptyComposeDraft(account: ConfiguredAccount): ComposeDraft {
+  return { accountId: account.id, mode: "new", to: "", cc: "", bcc: "", subject: "", body: "" }
+}
+
+function mergeComposeDraft(draft: ComposeDraft, updates: Partial<ComposeDraft>): ComposeDraft {
+  const accountId = updates.accountId ?? draft.accountId
+  const accountChanged = accountId !== draft.accountId
+  const jmapAccountId = accountChanged ? undefined : updates.jmapAccountId ?? draft.jmapAccountId
+  const sourceMessageKey = updates.sourceMessageKey ?? draft.sourceMessageKey
+  const sourceMessageId = updates.sourceMessageId ?? draft.sourceMessageId
+  const sourceReferences = updates.sourceReferences ?? draft.sourceReferences
+  return {
+    accountId,
+    ...(jmapAccountId === undefined ? {} : { jmapAccountId }),
+    mode: updates.mode ?? draft.mode,
+    to: updates.to ?? draft.to,
+    cc: updates.cc ?? draft.cc,
+    bcc: updates.bcc ?? draft.bcc,
+    subject: updates.subject ?? draft.subject,
+    body: updates.body ?? draft.body,
+    ...(sourceMessageKey === undefined ? {} : { sourceMessageKey }),
+    ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
+    ...(sourceReferences === undefined ? {} : { sourceReferences }),
+  }
 }
 
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
