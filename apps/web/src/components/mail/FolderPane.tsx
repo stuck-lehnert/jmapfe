@@ -11,7 +11,7 @@ import { MailUi } from "./mailUi"
 type AccountMailState = MailModel.AccountMailState
 type MaterialIconName = Ui.MaterialIconName
 
-const { MaterialActionIcon, TinyButton } = Ui
+const { Button, MaterialActionIcon } = Ui
 
 export function FolderPane({ accounts, mailByAccount, selectedFolder, draggedMessageKey, onSelectFolder, onDropMessageToFolder }: {
   readonly accounts: readonly ConfiguredAccount[]
@@ -43,7 +43,7 @@ export function MobileFolderDrawer({ accounts, mailByAccount, selectedFolder, dr
       <View style={styles.folderDrawerPanel}>
         <View style={styles.folderDrawerHeader}>
           <Text style={styles.paneHeader}>Folders</Text>
-          <TinyButton icon="close" label="Close" onPress={onClose} />
+          <Button kind="hollow" leading={<MaterialActionIcon name="close" size={11} color="#24364e" />} label="Close" onPress={onClose} style={styles.compactButton} textStyle={styles.compactButtonText} />
         </View>
         <FolderPaneContent accounts={accounts} mailByAccount={mailByAccount} selectedFolder={selectedFolder} draggedMessageKey={draggedMessageKey} onSelectFolder={onSelectFolder} onDropMessageToFolder={onDropMessageToFolder} hideHeader />
       </View>
@@ -88,14 +88,14 @@ function FolderPaneContent({ accounts, mailByAccount, selectedFolder, draggedMes
 
 function FolderButton({ icon, label, count, level = 0, badges = [], active, dropEnabled, onPress, onDropMessage }: { readonly icon: MaterialIconName; readonly label: string; readonly count?: number | undefined; readonly level?: number | undefined; readonly badges?: readonly string[] | undefined; readonly active: boolean; readonly dropEnabled?: boolean; readonly onPress: () => void; readonly onDropMessage?: (messageKey: string) => void }) {
   const button = (
-    <Pressable onPress={onPress} style={[styles.clickable, styles.folderButton, level > 0 && { paddingLeft: 6 + level * 12 }, active && styles.folderButtonActive, dropEnabled === true && styles.folderButtonDropTarget]}>
+    <Button kind="ghost" onPress={onPress} style={[styles.folderButton, level > 0 && { paddingLeft: 6 + level * 12 }, active && styles.folderButtonActive, dropEnabled === true && styles.folderButtonDropTarget]}>
       <MaterialActionIcon name={icon} size={16} color={active ? "#074a91" : "#64748b"} />
       <View style={styles.folderLabelGroup}>
         <Text numberOfLines={1} style={[styles.folderButtonText, active && styles.folderButtonTextActive]}>{label}</Text>
         {badges.length === 0 ? null : <Text numberOfLines={1} style={[styles.folderBadgeText, active && styles.folderButtonTextActive]}>{badges.join(" · ")}</Text>}
       </View>
       {count === undefined ? null : <Text style={[styles.folderCount, active && styles.folderButtonTextActive]}>{count}</Text>}
-    </Pressable>
+    </Button>
   )
   if (Platform.OS !== "web" || dropEnabled !== true || onDropMessage === undefined) return button
   return createElement("div", {

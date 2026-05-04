@@ -1,5 +1,5 @@
 import { createElement, useEffect, useRef, useState } from "react"
-import { Platform, Pressable, ScrollView, Text, View } from "react-native"
+import { Platform, ScrollView, Text, View } from "react-native"
 import { EmailHtml, MailModel } from "../../backend"
 import { htmlPreviewFrameStyle } from "../../layoutConstants"
 import { styles } from "../../styles"
@@ -11,7 +11,7 @@ type EmailAttachmentPart = MailModel.EmailAttachmentPart
 type MailMessage = MailModel.MailMessage
 type RemoteContentMode = MailModel.RemoteContentMode
 
-const { IconButton, SecondaryButton, Spinner, TinyButton, ToolbarIconButton } = Ui
+const { Button, MaterialActionIcon, Spinner } = Ui
 
 export function MessagePreview({ message, loading, loadingInlineImages, loadingAttachmentKey, loadingFlagMessageKeys, error, inlineImageError, attachmentError, remoteImageProxyBase, mobile, onBack, onToggleMessageFlag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments }: {
   readonly message: MailMessage | undefined
@@ -50,7 +50,7 @@ export function MessagePreview({ message, loading, loadingInlineImages, loadingA
     <>
       <ScrollView style={[styles.readerPane, mobile === true && styles.readerPaneMobile]} contentContainerStyle={styles.readerContent}>
         <View style={[styles.readerTitleRow, mobile === true && styles.readerTitleRowMobile]}>
-          {onBack === undefined ? null : <ToolbarIconButton icon="arrow-back" accessibilityLabel="Back to message list" onPress={onBack} />}
+          {onBack === undefined ? null : <Button kind="hollow" leading={<MaterialActionIcon name="arrow-back" size={18} color="#24364e" />} accessibilityLabel="Back to message list" onPress={onBack} style={styles.toolbarIconControl} />}
           <Text style={[styles.readerTitle, mobile === true && styles.readerTitleMobile]}>{message.subject || "(no subject)"}</Text>
           <FlagButton flagState={message.flagState} loading={loadingFlagMessageKeys[message.key] === true} onPress={() => onToggleMessageFlag(message.key)} />
         </View>
@@ -72,15 +72,15 @@ export function MessagePreview({ message, loading, loadingInlineImages, loadingA
             {htmlPreview.blockedInlineImages === 0 ? null : (
               <View style={styles.inlineContentNotice}>
                 <Text style={styles.inlineContentText}>{htmlPreview.blockedInlineImages} inline image{htmlPreview.blockedInlineImages === 1 ? "" : "s"} blocked until loaded from this message.</Text>
-                {canLoadInlineImages ? <SecondaryButton label="Load inline images" loading={loadingInlineImages} disabled={loadingInlineImages} onPress={() => onLoadInlineImages(message.key)} /> : <Text style={styles.inlineContentText}>Server did not provide matching inline image parts.</Text>}
+                {canLoadInlineImages ? <Button kind="hollow" label="Load inline images" loading={loadingInlineImages} disabled={loadingInlineImages} onPress={() => onLoadInlineImages(message.key)} /> : <Text style={styles.inlineContentText}>Server did not provide matching inline image parts.</Text>}
                 {inlineImageError === undefined ? null : <Text style={styles.errorText}>{inlineImageError}</Text>}
               </View>
             )}
             {htmlPreview.blockedRemoteUrls === 0 || remoteContentMode !== "blocked" ? null : (
               <View style={styles.remoteContentNotice}>
                 <Text style={styles.remoteContentText}>{htmlPreview.blockedRemoteUrls} remote item{htmlPreview.blockedRemoteUrls === 1 ? "" : "s"} blocked to protect your IP address.</Text>
-                <SecondaryButton label="Load" onPress={() => setRemoteContentModes((current) => ({ ...current, [message.key]: "direct" }))} />
-                {remoteImageProxyBase === undefined ? null : <SecondaryButton label="Load via configured proxy" onPress={() => setRemoteContentModes((current) => ({ ...current, [message.key]: "proxy" }))} />}
+                <Button kind="hollow" label="Load" onPress={() => setRemoteContentModes((current) => ({ ...current, [message.key]: "direct" }))} />
+                {remoteImageProxyBase === undefined ? null : <Button kind="hollow" label="Load via configured proxy" onPress={() => setRemoteContentModes((current) => ({ ...current, [message.key]: "proxy" }))} />}
               </View>
             )}
             <HtmlPreview html={htmlPreview.html} />
@@ -105,23 +105,23 @@ function AttachmentList({ messageKey, attachments, loadingAttachmentKey, onOpenA
     <View style={styles.attachmentList}>
       <View style={styles.attachmentListHeader}>
         <Text style={styles.attachmentListTitle}>{attachments.length} Attachment{attachments.length === 1 ? "" : "s"}</Text>
-        {attachments.length > 1 ? <TinyButton icon="archive" label="Download zip" loading={loadingAttachmentKey === allActionKey} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAllAttachments(messageKey)} /> : null}
+        {attachments.length > 1 ? <Button kind="hollow" leading={<MaterialActionIcon name="archive" size={11} color="#24364e" />} label="Download zip" loading={loadingAttachmentKey === allActionKey} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAllAttachments(messageKey)} style={styles.compactButton} textStyle={styles.compactButtonText} /> : null}
       </View>
       <View style={styles.attachmentGrid}>
         {attachments.map((attachment, index) => {
           const actionKey = MailUi.attachmentActionKey(messageKey, attachment, index)
           const loading = loadingAttachmentKey === actionKey
           return (
-            <Pressable key={MailUi.attachmentKey(attachment, index)} onPress={loadingAttachmentKey === undefined ? () => onOpenAttachment(messageKey, attachment, index) : undefined} style={[styles.attachmentItem, styles.clickable]}>
+            <Button key={MailUi.attachmentKey(attachment, index)} kind="hollow" accessibilityLabel={`Open ${attachment.name}`} disabled={loadingAttachmentKey !== undefined} onPress={() => onOpenAttachment(messageKey, attachment, index)} style={styles.attachmentItem}>
               <View style={styles.attachmentFileText}>
                 <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
                 <Text numberOfLines={1} style={styles.attachmentMeta}>{MailUi.attachmentMetaText(attachment)}</Text>
               </View>
               <View style={styles.attachmentActions}>
                 {loading ? <Spinner /> : null}
-                <IconButton icon="file-download" accessibilityLabel={`Download ${attachment.name}`} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAttachment(messageKey, attachment, index)} />
+                <Button kind="hollow" leading={<MaterialActionIcon name="file-download" size={17} color="#24364e" />} accessibilityLabel={`Download ${attachment.name}`} disabled={loadingAttachmentKey !== undefined} onPress={() => onDownloadAttachment(messageKey, attachment, index)} stopPropagation style={styles.squareIconButton} />
               </View>
-            </Pressable>
+            </Button>
           )
         })}
       </View>

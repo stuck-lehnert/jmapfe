@@ -20,11 +20,11 @@ import {
   type SrvRecord,
 } from "@jmapfe/jmap-core"
 import { useState } from "react"
-import { Pressable, Text, TextInput, View } from "react-native"
+import { Text, TextInput, View } from "react-native"
 import { styles } from "../../styles"
 import { Ui } from "../primitives"
 
-const { PrimaryButton, SecondaryButton } = Ui
+const { Button } = Ui
 
 type SetupStep = "identity" | "server" | "auth" | "review"
 type ServerStatus = "idle" | "checking" | "srv" | "fallback" | "error"
@@ -222,10 +222,10 @@ export function AccountSetupFlow({ mode, onAccountVerified, fetchImpl }: {
           <Text style={styles.flowCopy}>The setup check uses this secret once. It is not written to browser storage.</Text>
           <View style={styles.authOptions}>
             {AUTH_OPTIONS.map((option) => (
-              <Pressable key={option.value} onPress={() => update({ authKind: option.value })} style={[styles.clickable, styles.authOption, draft.authKind === option.value && styles.authOptionActive]}>
+              <Button key={option.value} kind="ghost" accessibilityLabel={option.label} onPress={() => update({ authKind: option.value })} style={[styles.authOption, draft.authKind === option.value && styles.authOptionActive]}>
                 <Text style={[styles.authOptionText, draft.authKind === option.value && styles.authOptionTextActive]}>{option.label}</Text>
                 <Text style={[styles.authOptionHelp, draft.authKind === option.value && styles.authOptionHelpActive]}>{option.help}</Text>
-              </Pressable>
+              </Button>
             ))}
           </View>
           <Field label="Username" value={accountLoginUsername(draft)} placeholder="Usually your full email address" onChangeText={(username) => update({ username })} />
@@ -249,11 +249,11 @@ export function AccountSetupFlow({ mode, onAccountVerified, fetchImpl }: {
 
       {error === undefined ? null : <Text style={styles.errorText}>{error}</Text>}
       <View style={styles.flowButtons}>
-        {step === "identity" ? null : <SecondaryButton label="Back" onPress={back} />}
+        {step === "identity" ? null : <Button kind="hollow" label="Back" onPress={back} />}
         {step === "review" ? (
-          <PrimaryButton label="Add account" disabled={verifiedSession === undefined} onPress={addVerifiedAccount} />
+          <Button kind="filled" label="Add account" disabled={verifiedSession === undefined} onPress={addVerifiedAccount} />
         ) : (
-          <PrimaryButton label="Continue" loading={navigationBusy} disabled={navigationBusy} onPress={() => { void next() }} />
+          <Button kind="filled" label="Continue" loading={navigationBusy} disabled={navigationBusy} onPress={() => { void next() }} />
         )}
       </View>
     </View>

@@ -9,7 +9,7 @@ import { MailUi } from "./mailUi"
 
 type MailMessage = MailModel.MailMessage
 
-const { SecondaryButton } = Ui
+const { Button } = Ui
 
 export function MessageList({ accounts, messages, selectedMessageKey, loadingFlagMessageKeys, canLoadMore, loadingMore, onSelectMessage, onOpenMessageContextMenu, onToggleMessageFlag, onStartMessageDrag, onEndMessageDrag, onLoadMore }: {
   readonly accounts: readonly ConfiguredAccount[]
@@ -70,7 +70,7 @@ export function MessageList({ accounts, messages, selectedMessageKey, loadingFla
             style: { cursor: "grab" },
           }, row)
         })}
-        {canLoadMore ? <View style={styles.loadMoreArea}><SecondaryButton label="Load more" loading={loadingMore} disabled={loadingMore} onPress={onLoadMore} /></View> : null}
+        {canLoadMore ? <View style={styles.loadMoreArea}><Button kind="hollow" label="Load more" loading={loadingMore} disabled={loadingMore} onPress={onLoadMore} /></View> : null}
       </ScrollView>
     </View>
   )

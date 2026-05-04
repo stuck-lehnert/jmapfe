@@ -3,7 +3,7 @@ import { Text, View } from "react-native"
 import { styles } from "../../styles"
 import { Ui } from "../primitives"
 
-const { SecondaryButton } = Ui
+const { Button } = Ui
 
 export function EmptyThreadList({ accounts, selectedFolder, searchActive, canLoadMore, loadingMore, onLoadMore }: {
   readonly accounts: readonly ConfiguredAccount[]
@@ -24,7 +24,7 @@ export function EmptyThreadList({ accounts, selectedFolder, searchActive, canLoa
           ? "Unified Inbox is ready to merge incoming mail from all accounts."
           : `${selectedAccount.email} is configured. Its folders will fill after mailbox sync is wired.`}
       </Text>
-      {canLoadMore ? <View style={styles.loadMoreArea}><SecondaryButton label="Load messages" loading={loadingMore} disabled={loadingMore} onPress={onLoadMore} /></View> : null}
+      {canLoadMore ? <View style={styles.loadMoreArea}><Button kind="hollow" label="Load messages" loading={loadingMore} disabled={loadingMore} onPress={onLoadMore} /></View> : null}
     </View>
   )
 }

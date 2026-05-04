@@ -1,5 +1,5 @@
 import { createElement, type MouseEvent as ReactMouseEvent } from "react"
-import { Platform, Pressable, Text, View, useWindowDimensions } from "react-native"
+import { Platform, Pressable, View, useWindowDimensions } from "react-native"
 import { MailModel } from "../../backend"
 import { contextMenuBackdropWebStyle } from "../../layoutConstants"
 import { styles } from "../../styles"
@@ -10,7 +10,7 @@ type MailMessage = MailModel.MailMessage
 type MessageContextMenuState = MailModel.MessageContextMenuState
 type MaterialIconName = Ui.MaterialIconName
 
-const { MaterialActionIcon } = Ui
+const { Button, MaterialActionIcon } = Ui
 
 export function MessageContextMenu({ state, message, onClose, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage }: {
   readonly state: MessageContextMenuState | undefined
@@ -52,12 +52,7 @@ function ContextMenuBackdrop({ onClose }: { readonly onClose: () => void }) {
 
 function ContextMenuItem({ icon, label, destructive, onPress }: { readonly icon: MaterialIconName; readonly label: string; readonly destructive?: boolean; readonly onPress: () => void }) {
   const color = destructive === true ? "#b91c1c" : "#172033"
-  return (
-    <Pressable onPress={(event) => { event.stopPropagation(); onPress() }} style={[styles.clickable, styles.contextMenuItem]}>
-      <MaterialActionIcon name={icon} size={16} color={color} />
-      <Text style={[styles.contextMenuText, destructive === true && styles.contextMenuTextDestructive]}>{label}</Text>
-    </Pressable>
-  )
+  return <Button kind="ghost" leading={<MaterialActionIcon name={icon} size={16} color={color} />} label={label} onPress={onPress} stopPropagation style={styles.contextMenuItem} textStyle={[styles.contextMenuText, destructive === true && styles.contextMenuTextDestructive]} />
 }
 
 function clamp(value: number, min: number, max: number): number {

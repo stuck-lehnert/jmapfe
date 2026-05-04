@@ -18,7 +18,7 @@ type EmailAttachmentPart = MailModel.EmailAttachmentPart
 type MessageContextMenuState = MailModel.MessageContextMenuState
 type SearchState = MailModel.SearchState
 
-const { SecondaryButton } = Ui
+const { Button } = Ui
 
 export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selectedMessageKey, mobile, loadingMoreFolder, loadingMessageKey, loadingInlineImageKey, loadingAttachmentKey, loadingFlagMessageKeys, messageBodyError, inlineImageError, attachmentError, searchDraft, searchState, remoteImageProxyBase, onSearchDraftChange, onSearch, onClearSearch, onSelectMessage, onCloseMessage, onToggleMessageFlag, onMarkMessageReadState, onDeleteMessage, onStartMessageDrag, onEndMessageDrag, onLoadInlineImages, onOpenAttachment, onDownloadAttachment, onDownloadAllAttachments, onLoadMoreFolder }: {
   readonly accounts: readonly ConfiguredAccount[]
@@ -69,8 +69,8 @@ export function MailWorkspace({ accounts, selectedFolder, mailByAccount, selecte
         {syncMessage.length === 0 ? null : <Text style={styles.threadSubtle}>{syncMessage}</Text>}
         <View style={[styles.searchRow, mobile && styles.searchRowMobile]}>
           <TextInput value={searchDraft} placeholder="Search this folder on server" placeholderTextColor="#718096" onChangeText={onSearchDraftChange} onSubmitEditing={onSearch} autoCapitalize="none" returnKeyType="search" style={styles.searchInput} />
-          <SecondaryButton label="Search" loading={searchState.status === "searching"} disabled={searchState.status === "searching"} onPress={onSearch} />
-          {searchActive ? <SecondaryButton label="Clear" onPress={onClearSearch} /> : null}
+          <Button kind="hollow" label="Search" loading={searchState.status === "searching"} disabled={searchState.status === "searching"} onPress={onSearch} />
+          {searchActive ? <Button kind="ghost" label="Clear" onPress={onClearSearch} /> : null}
         </View>
         {searchActive ? <SearchStatusLine searchState={searchState} loadedCount={messages.length} /> : null}
       </View>

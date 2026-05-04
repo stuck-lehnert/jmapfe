@@ -4,7 +4,7 @@ import { ScrollView, Text, TextInput, View } from "react-native"
 import { styles } from "../../styles"
 import { Ui } from "../primitives"
 
-const { PrimaryButton, SecondaryButton } = Ui
+const { Button } = Ui
 
 export function Settings({ accounts, remoteImageProxyBase, accountSetup, onRemoteImageProxyChange, onDeleteAccount }: {
   readonly accounts: readonly ConfiguredAccount[]
@@ -37,7 +37,7 @@ export function Settings({ accounts, remoteImageProxyBase, accountSetup, onRemot
           {accounts.map((account) => (
             <View key={account.id} style={styles.manageAccountRow}>
               <AccountSummary account={account} />
-              <SecondaryButton label="Remove" onPress={() => onDeleteAccount(account.id)} />
+              <Button kind="hollow" label="Remove" onPress={() => onDeleteAccount(account.id)} />
             </View>
           ))}
         </View>
@@ -49,8 +49,8 @@ export function Settings({ accounts, remoteImageProxyBase, accountSetup, onRemot
             <TextInput value={remoteImageProxyDraft} placeholder="https://proxy.example/image?url={url}" placeholderTextColor="#718096" onChangeText={setRemoteImageProxyDraft} autoCapitalize="none" style={styles.input} />
           </View>
           <View style={styles.flowButtons}>
-            <SecondaryButton label="Clear" disabled={remoteImageProxyDraft.trim().length === 0 && remoteImageProxyBase === undefined} onPress={clearRemoteImageProxy} />
-            <PrimaryButton label="Save" onPress={saveRemoteImageProxy} />
+            <Button kind="hollow" label="Clear" disabled={remoteImageProxyDraft.trim().length === 0 && remoteImageProxyBase === undefined} onPress={clearRemoteImageProxy} />
+            <Button kind="filled" label="Save" onPress={saveRemoteImageProxy} />
           </View>
         </View>
       </View>
